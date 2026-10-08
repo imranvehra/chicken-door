@@ -100,6 +100,7 @@
   </details>
 
   <p class="muted" id="calinfo"></p>
+  <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
 </div>
 
@@ -137,7 +138,10 @@ $("pforget").onclick = e => { e.preventDefault(); ls("pin", null); alert("PIN fo
 /* ---------- reading the channel ---------- */
 function parseCfg(f8) {
   const c = {};
-  (f8 || "").split(/\s+/).forEach(kv => { const m = kv.match(/^(\w)=(\d+)$/); if (m) c[m[1]] = +m[2]; });
+  (f8 || "").split(/\s+/).forEach(kv => {
+    const m = kv.match(/^(\w+)=([\d.]+)$/);
+    if (m) c[m[1]] = m[1] === "ip" ? m[2] : +m[2];   // ip = the door's address on the home network
+  });
   return c;
 }
 function fmtTime(d) { return d.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}); }
@@ -211,6 +215,10 @@ function render() {
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
   $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection works on the default limit only.";
+  // The door reports its current address, so this link follows it when the router hands out a new one.
+  const ip = /^\d+\.\d+\.\d+\.\d+$/.test(c.ip || "") && c.ip !== "0.0.0.0" ? c.ip : "";
+  $("local").innerHTML = ip ? `On the home WiFi: <a href="http://${ip}/">open the door's local page</a> (${ip}`
+    + (c.m ? `, also <a href="http://chickendoor.local/">chickendoor.local</a>` : "") + ") — calibration and PIN changes" : "";
 
   const lm = [...feeds].reverse().find(isRealMove);
   $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: peak ${lm.field3} A, running ${lm.field4} A, ${lm.field5} s` : "–";
