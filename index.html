@@ -6,6 +6,10 @@
 <meta name="theme-color" content="#2e7d32">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Chicken Door">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Chicken Door</title>
 <!--
   Remote control for Imran's chicken door, through ThingSpeak.
@@ -311,6 +315,8 @@ $("ssave").onclick = () => {
 /* ---------- start ---------- */
 if (loadKeys()) { $("main").hidden = false; refresh(); } else showSetup();
 setInterval(() => { if (!busy && !$("setbox").open && !$("main").hidden) refresh(); }, 30000);
+// Phones pause hidden pages; refresh as soon as the app is looked at again (unlock, switching back).
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !busy && !$("main").hidden) refresh(); });
 </script>
 </body>
 </html>

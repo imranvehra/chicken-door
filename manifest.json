@@ -1,0 +1,14 @@
+{
+  "name": "Imran's Chicken Door",
+  "short_name": "Chicken Door",
+  "description": "Open, close and watch the chicken coop door from anywhere.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#2e7d32",
+  "theme_color": "#2e7d32",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
