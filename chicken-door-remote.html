@@ -136,7 +136,6 @@ function fmtWhen(d) {
   const today = new Date().toDateString() === d.toDateString();
   return (today ? "" : d.toLocaleDateString([], {month: "short", day: "numeric"}) + " ") + fmtTime(d);
 }
-function minuteToText(m) { const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0); return fmtTime(d); }
 
 async function refresh() {
   if (busy) return;
@@ -166,9 +165,17 @@ function render() {
   const al = parseInt(last.field2) || 0;
   $("alarm").innerHTML = al ? `<div class="al">&#9888; ${esc(last.status || "Alarm")}</div>` : "";
 
-  const nc = parseInt(last.field6);
+  // Field 6: minutes from that report until the next automatic close, and why ("5 night" / "1290 sunset").
+  const m = (last.field6 || "").match(/^(\d+)\s+(night|sunset)$/);
   if (s === 4 || s === 3) $("next").textContent = "Stays closed until you open it";
-  else if (nc >= 0) $("next").textContent = "Will close at " + minuteToText(nc) + " (" + (cfg.s ?? 30) + " min after sunset)";
+  else if (m) {
+    const at = new Date(t.getTime() + (+m[1]) * 60000);
+    const day = at.toDateString() === new Date().toDateString() ? "" : "tomorrow ";
+    const left = Math.round((at - Date.now()) / 60000);
+    $("next").textContent = (m[2] === "night" ? "Opened at night: will close automatically at " : "Will close " + day + "at ")
+      + fmtTime(at) + (m[2] === "sunset" ? " (" + cfg.s + " min after sunset)" : "")
+      + (left > 0 && left <= 60 ? " — in " + left + " min" : "");
+  }
   else $("next").textContent = "";
 
   const c = parseCfg(last.field8);
