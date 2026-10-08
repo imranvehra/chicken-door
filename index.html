@@ -19,7 +19,7 @@
 -->
 <style>
   :root { --bg:#fafafa; --fg:#222; --muted:#666; --card:#fff; --line:#ddd;
-          --open:#2e7d32; --closed:#37474f; --moving:#ef6c00; --unknown:#757575; --alarm:#c62828; }
+          --open:#c62828; --closed:#2e7d32; --moving:#ef6c00; --unknown:#757575; --alarm:#c62828; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#121212; --fg:#eee; --muted:#aaa; --card:#1e1e1e; --line:#333; }
   }
@@ -32,14 +32,12 @@
   .s0 { background: var(--unknown); } .s1, .s3 { background: var(--moving); } .s2 { background: var(--open); } .s4 { background: var(--closed); }
   .al, .warn { color: #fff; font-weight: bold; padding: 12px; border-radius: 10px; margin: 8px 0; }
   .al { background: var(--alarm); } .warn { background: var(--moving); }
-  button { font-size: 1.25em; width: 100%; padding: 16px; margin: 6px 0 0; border-radius: 10px;
+  button { font-size: 1.25em; width: 100%; padding: 16px; margin: 0 0 8px; border-radius: 10px;
            border: 1px solid #888; background: var(--card); color: var(--fg); }
   .hb { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
-  .hold { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin-bottom: 8px; }
-  .bar { height: 100%; width: 0; }
-  #ob { background: #c62828; border-color: #c62828; color: #fff; } #obb { background: #c62828; }
-  #cb { background: #2e7d32; border-color: #2e7d32; color: #fff; } #cbb { background: #2e7d32; }
-  #fresh { font-size: 1.15em; color: var(--fg); }
+  .hold { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 10px 0 4px; }
+  .bar { height: 100%; width: 0; } #obb { background: var(--open); } #cbb { background: var(--closed); }
+  #fresh { font-size: 1.15em; color: var(--fg); cursor: pointer; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 10px 0; }
   table { width: 100%; border-collapse: collapse; } td { padding: 3px 4px; vertical-align: top; }
   td:first-child { color: var(--muted); white-space: nowrap; }
@@ -47,7 +45,7 @@
   input { font-size: 1em; width: 6em; padding: 4px; }
   .keys input { width: 100%; }
   summary { font-size: 1.1em; cursor: pointer; margin: 4px 0; }
-  .pend { border-left: 6px solid var(--moving); } .pend.ok { border-left-color: var(--open); }
+  .pend { border-left: 6px solid var(--moving); } .pend.ok { border-left-color: #2e7d32; }
   .pend.bad { border-left-color: var(--alarm); } .pend button { font-size: 1em; padding: 10px; }
   .st small { display: block; font-size: .45em; opacity: .9; }
   ul { padding-left: 18px; margin: 4px 0; } li { margin: 3px 0; }
@@ -69,15 +67,16 @@
 
 <div id="main" hidden>
   <h2>Imran's Chicken Door <span class="tag">remote</span></h2>
-  <div class="muted" id="fresh">Loading…</div>
+  <div class="muted" id="fresh" title="Tap to refresh">Loading…</div>
   <div id="offline"></div>
   <div id="state" class="st s0">…</div>
   <div id="pend"></div>
   <div id="alarm"></div>
   <p id="next"></p>
 
-  <button id="ob" class="hb">Hold to OPEN</button><div class="hold"><div id="obb" class="bar"></div></div>
-  <button id="cb" class="hb">Hold to CLOSE</button><div class="hold"><div id="cbb" class="bar"></div></div>
+  <!-- The hold bars sit above the buttons, where the finger does not cover them. -->
+  <div class="hold"><div id="obb" class="bar"></div></div><button id="ob" class="hb">Hold to OPEN</button>
+  <div class="hold"><div id="cbb" class="bar"></div></div><button id="cb" class="hb">Hold to CLOSE</button>
 
   <div class="card">
     <b>Last move</b>
@@ -131,6 +130,7 @@ $("ksave").onclick = () => {
   ls("ts_c", $("kc").value.trim()); ls("ts_r", $("kr").value.trim()); ls("ts_t", $("kt").value.trim()); ls("ts_k", $("kk").value.trim());
   if (loadKeys()) { $("setup").hidden = true; $("main").hidden = false; refresh(); }
 };
+$("fresh").onclick = () => { if (pend) checkPend(); else refresh(); };   // tap the "Updated" line to refresh now
 $("kedit").onclick = e => { e.preventDefault(); showSetup(); };
 $("pforget").onclick = e => { e.preventDefault(); ls("pin", null); alert("PIN forgotten on this phone."); };
 
@@ -164,7 +164,9 @@ async function refresh() {
 function render() {
   if (!last) { $("fresh").textContent = "No data from the door yet."; return; }
   const t = new Date(last.created_at), ageMin = (Date.now() - t) / 60000;
-  $("fresh").textContent = "Updated " + (ageMin < 1 ? "just now" : Math.round(ageMin) + " min ago") + " (" + fmtWhen(t) + ")";
+  // The door reports on every change and every 10 min; "checked" shows that the app itself keeps looking.
+  $("fresh").textContent = "Updated " + (ageMin < 1 ? "just now" : Math.round(ageMin) + " min ago") + " (" + fmtWhen(t) + ")"
+    + " · checked " + new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit", second: "2-digit"}) + " ↻";
   // The board reports at least every 10 min; longer silence means it is offline or busy moving.
   $("offline").innerHTML = ageMin > 15 ? `<div class="warn">No report from the door for ${Math.round(ageMin)} min. It may be offline (power or WiFi).</div>` : "";
 
@@ -300,10 +302,10 @@ function resolvePend() {
           || (pend.picked && new Date(last.created_at).getTime() > pend.picked))) {
     const st = last.status || "";
     if (/wrong PIN|PIN locked/i.test(st)) ls("pin", null);
-    done = {text: st, bad: /refused|already|ignored|unknown|PIN|OBSTRUCTION|TIMEOUT|Gave up/i.test(st), at: Date.now()};
+    done = {text: st, bad: /refused|already|ignored|expired|unknown|PIN|OBSTRUCTION|TIMEOUT|Gave up/i.test(st), at: Date.now()};
     pend = null; savePend();
   } else if (pend.picked && Date.now() - pend.picked > RESULT_GIVEUP_MS) {
-    done = {own: true, text: `The door took the ${pend.label} command at ${fmtTime(new Date(pend.picked))} but has not reported back. Check the door.`, bad: true, at: Date.now()};
+    done = {text: `The door took the ${pend.label} command at ${fmtTime(new Date(pend.picked))} but has not reported back. Check the door.`, bad: true, at: Date.now()};
     pend = null; savePend();
   }
 }
@@ -325,7 +327,7 @@ function showPend() {
     box.innerHTML = `<div class="card pend">${h}</div>`;
     if ($("pcancel")) $("pcancel").onclick = cancelPend;
   } else if (done && Date.now() - done.at < 3 * 60000) {
-    box.innerHTML = `<div class="card pend ${done.bad ? "bad" : "ok"}">${done.bad ? "&#9888;" : "&#10004;"} ${done.own ? "" : "Door: "}${esc(done.text)}</div>`;
+    box.innerHTML = `<div class="card pend ${done.bad ? "bad" : "ok"}">${done.bad ? "&#9888;" : "&#10004;"} ${esc(done.text)}</div>`;
   } else box.innerHTML = "";
 }
 
@@ -333,7 +335,7 @@ async function cancelPend() {
   if (!pend || !confirm(`Cancel the ${pend.label} command?`)) return;
   try {
     const r = await fetch(`${API}/talkbacks/${K.t}/commands/${pend.id}.json?api_key=${encodeURIComponent(K.k)}`, {method: "DELETE"});
-    if (r.ok) { done = {text: `${pend.label} command cancelled before the door took it.`, own: true, bad: false, at: Date.now()}; pend = null; savePend(); }
+    if (r.ok) { done = {text: `${pend.label} command cancelled before the door took it.`, bad: false, at: Date.now()}; pend = null; savePend(); }
     else if (r.status === 404) { pend.picked = Date.now(); savePend(); alert("Too late: the door has already taken the command."); }
     else throw new Error("HTTP " + r.status);
   } catch (e) { alert("Could not cancel: " + e.message); }
@@ -363,7 +365,7 @@ function hold(id, cmd, label, sameStates) {
     if (!t0) return;
     const p = (Date.now() - t0) / (cfg.h * 1000);
     bar.style.width = Math.min(p, 1) * 100 + "%";
-    if (p >= 1) { t0 = 0; bar.style.width = "0"; send(cmd, label); } else requestAnimationFrame(step);
+    if (p >= 1) { t0 = 0; bar.style.width = "0"; busy = false; send(cmd, label); } else requestAnimationFrame(step);
   }
   b.onpointerdown = e => {
     e.preventDefault();
