@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2e7d32">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Chicken Door</title>
+<!--
+  Remote control for Imran's chicken door, through ThingSpeak.
+  The board uploads its status to a ThingSpeak channel and takes OPEN/CLOSE/SET commands from a TalkBack
+  queue. This page reads the channel and adds commands, over HTTPS. It contains no keys: they are entered
+  once on each phone and kept only in that browser.
+-->
+<style>
+  :root { --bg:#fafafa; --fg:#222; --muted:#666; --card:#fff; --line:#ddd;
+          --open:#2e7d32; --closed:#37474f; --moving:#ef6c00; --unknown:#757575; --alarm:#c62828; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#121212; --fg:#eee; --muted:#aaa; --card:#1e1e1e; --line:#333; }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg);
+         max-width: 460px; margin: auto; padding: 12px; }
+  h2 { margin: 6px 0 2px; } .tag { font-size: .7em; color: var(--muted); font-weight: normal; }
+  .muted { color: var(--muted); font-size: .9em; }
+  .st { font-size: 2em; text-align: center; color: #fff; border-radius: 12px; padding: 18px 8px; margin: 10px 0; }
+  .s0 { background: var(--unknown); } .s1, .s3 { background: var(--moving); } .s2 { background: var(--open); } .s4 { background: var(--closed); }
+  .al, .warn { color: #fff; font-weight: bold; padding: 12px; border-radius: 10px; margin: 8px 0; }
+  .al { background: var(--alarm); } .warn { background: var(--moving); }
+  button { font-size: 1.25em; width: 100%; padding: 16px; margin: 6px 0 0; border-radius: 10px;
+           border: 1px solid #888; background: var(--card); color: var(--fg); }
+  .hb { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  .hold { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin-bottom: 8px; }
+  .bar { height: 100%; width: 0; background: var(--open); } #cbb { background: var(--closed); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 10px 0; }
+  table { width: 100%; border-collapse: collapse; } td { padding: 3px 4px; vertical-align: top; }
+  td:first-child { color: var(--muted); white-space: nowrap; }
+  canvas { width: 100%; height: 180px; }
+  input { font-size: 1em; width: 6em; padding: 4px; }
+  .keys input { width: 100%; }
+  summary { font-size: 1.1em; cursor: pointer; margin: 4px 0; }
+  #pz { position: fixed; inset: 0; background: rgba(0,0,0,.8); color: #fff; font-size: 1.25em;
+        padding: 35% 10%; text-align: center; }
+  ul { padding-left: 18px; margin: 4px 0; } li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<div id="setup" hidden>
+  <h2>Chicken Door <span class="tag">setup</span></h2>
+  <p class="muted">Enter your ThingSpeak details once. They are stored only in this browser on this phone.</p>
+  <div class="card keys">
+    <p>Channel ID<br><input id="kc" inputmode="numeric"></p>
+    <p>Channel Read API Key<br><input id="kr" autocomplete="off"></p>
+    <p>TalkBack ID<br><input id="kt" inputmode="numeric"></p>
+    <p>TalkBack API Key<br><input id="kk" autocomplete="off"></p>
+    <button id="ksave">Save</button>
+  </div>
+</div>
+
+<div id="main" hidden>
+  <h2>Imran's Chicken Door <span class="tag">remote</span></h2>
+  <div class="muted" id="fresh">Loading…</div>
+  <div id="offline"></div>
+  <div id="state" class="st s0">…</div>
+  <div id="alarm"></div>
+  <p id="next"></p>
+
+  <button id="ob" class="hb">Hold to OPEN</button><div class="hold"><div id="obb" class="bar"></div></div>
+  <button id="cb" class="hb">Hold to CLOSE</button><div class="hold"><div id="cbb" class="bar"></div></div>
+
+  <div class="card">
+    <b>Last move</b>
+    <div id="lastmove" class="muted">–</div>
+    <canvas id="trend" width="440" height="180"></canvas>
+    <div class="muted">Motor current of recent moves: blue = running, red = peak (start-up spike)</div>
+  </div>
+
+  <div class="card"><b>Recent events</b><ul id="events"></ul></div>
+
+  <details class="card" id="setbox">
+    <summary>Settings</summary>
+    <table>
+      <tr><td>Close after sunset (min)</td><td><input id="s1" type="number" min="0" max="180"></td></tr>
+      <tr><td>If opened at night, close after (min)</td><td><input id="s2" type="number" min="1" max="120"></td></tr>
+      <tr><td>Hold time for buttons (s)</td><td><input id="s3" type="number" min="1" max="10"></td></tr>
+      <tr><td>Obstruction limit (A)</td><td><input id="s4" type="number" step="0.05" min="0.3" max="8"></td></tr>
+    </table>
+    <button id="ssave">Send settings to the door</button>
+    <p class="muted">Calibration and PIN changes are only possible on the local page at the coop.</p>
+  </details>
+
+  <p class="muted" id="calinfo"></p>
+  <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
+</div>
+
+<script>
+"use strict";
+const API = "https://api.thingspeak.com";
+const STATES = ["UNKNOWN", "OPENING", "OPEN", "CLOSING", "CLOSED"];
+let K = {}, feeds = [], last = null, cfg = {s: 30, n: 5, h: 5, o: 950, c: 0, p: 0}, busy = false;
+
+const $ = id => document.getElementById(id);
+function ls(k, v) {                       // localStorage can be unavailable (private mode): fail quietly
+  try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }
+  catch (e) {}
+  return null;
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+/* ---------- keys ---------- */
+function loadKeys() {
+  K = {c: ls("ts_c"), r: ls("ts_r"), t: ls("ts_t"), k: ls("ts_k")};
+  return K.c && K.r && K.t && K.k;
+}
+function showSetup() {
+  $("main").hidden = true; $("setup").hidden = false;
+  $("kc").value = K.c || ""; $("kr").value = K.r || ""; $("kt").value = K.t || ""; $("kk").value = K.k || "";
+}
+$("ksave").onclick = () => {
+  ls("ts_c", $("kc").value.trim()); ls("ts_r", $("kr").value.trim()); ls("ts_t", $("kt").value.trim()); ls("ts_k", $("kk").value.trim());
+  if (loadKeys()) { $("setup").hidden = true; $("main").hidden = false; refresh(); }
+};
+$("kedit").onclick = e => { e.preventDefault(); showSetup(); };
+$("pforget").onclick = e => { e.preventDefault(); ls("pin", null); alert("PIN forgotten on this phone."); };
+
+/* ---------- reading the channel ---------- */
+function parseCfg(f8) {
+  const c = {};
+  (f8 || "").split(/\s+/).forEach(kv => { const m = kv.match(/^(\w)=(\d+)$/); if (m) c[m[1]] = +m[2]; });
+  return c;
+}
+function fmtTime(d) { return d.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}); }
+function fmtWhen(d) {
+  const today = new Date().toDateString() === d.toDateString();
+  return (today ? "" : d.toLocaleDateString([], {month: "short", day: "numeric"}) + " ") + fmtTime(d);
+}
+function minuteToText(m) { const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0); return fmtTime(d); }
+
+async function refresh() {
+  if (busy) return;
+  try {
+    const r = await fetch(`${API}/channels/${K.c}/feeds.json?api_key=${encodeURIComponent(K.r)}&results=120&status=true`, {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    feeds = j.feeds || [];
+    last = feeds[feeds.length - 1] || null;
+    render();
+  } catch (e) {
+    $("fresh").textContent = "Cannot reach ThingSpeak (" + e.message + "). Check the phone's internet and the keys.";
+  }
+}
+
+function render() {
+  if (!last) { $("fresh").textContent = "No data from the door yet."; return; }
+  const t = new Date(last.created_at), ageMin = (Date.now() - t) / 60000;
+  $("fresh").textContent = "Updated " + (ageMin < 1 ? "just now" : Math.round(ageMin) + " min ago") + " (" + fmtWhen(t) + ")";
+  // The board reports at least every 10 min; longer silence means it is offline or busy moving.
+  $("offline").innerHTML = ageMin > 15 ? `<div class="warn">No report from the door for ${Math.round(ageMin)} min. It may be offline (power or WiFi).</div>` : "";
+
+  const s = Math.max(0, Math.min(4, parseInt(last.field1) || 0));
+  $("state").className = "st s" + s;
+  $("state").textContent = "Currently " + STATES[s];
+
+  const al = parseInt(last.field2) || 0;
+  $("alarm").innerHTML = al ? `<div class="al">&#9888; ${esc(last.status || "Alarm")}</div>` : "";
+
+  const nc = parseInt(last.field6);
+  if (s === 4 || s === 3) $("next").textContent = "Stays closed until you open it";
+  else if (nc >= 0) $("next").textContent = "Will close at " + minuteToText(nc) + " (" + (cfg.s ?? 30) + " min after sunset)";
+  else $("next").textContent = "";
+
+  const c = parseCfg(last.field8);
+  if (c.h) {
+    cfg = Object.assign(cfg, c);
+    if (!$("setbox").open) {
+      $("s1").value = cfg.s; $("s2").value = cfg.n; $("s3").value = cfg.h; $("s4").value = (cfg.o / 1000).toFixed(2);
+    }
+  }
+  $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
+  $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
+  $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection works on the default limit only.";
+
+  const lm = [...feeds].reverse().find(isRealMove);
+  $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: peak ${lm.field3} A, running ${lm.field4} A, ${lm.field5} s` : "–";
+
+  // Events: the status text of each report, newest first, without repeats.
+  const ev = []; let prev = null;
+  for (let i = feeds.length - 1; i >= 0 && ev.length < 15; i--) {
+    const f = feeds[i];
+    if (f.status && f.status !== prev) ev.push(`<li><span class="muted">${fmtWhen(new Date(f.created_at))}</span> ${esc(f.status)}</li>`);
+    prev = f.status;
+  }
+  $("events").innerHTML = ev.join("") || "<li class='muted'>none yet</li>";
+
+  drawTrend();
+}
+
+/* A real stroke always starts with the motor's ~4 A start-up spike. Reports with a lower peak come from a
+   "move" of a door that was already at its end (no current), so they are not counted as moves. */
+function isRealMove(f) { return parseFloat(f.field3) >= 1.0 && parseFloat(f.field5) > 0; }
+
+/* One point per move: consecutive reports repeat the same last-move numbers, so only changes count. */
+function drawTrend() {
+  const pts = []; let key = "";
+  feeds.forEach(f => {
+    if (!isRealMove(f)) return;
+    const k = f.field3 + "|" + f.field4 + "|" + f.field5;
+    if (k !== key) { pts.push({run: +f.field4, peak: +f.field3}); key = k; }
+  });
+  const cv = $("trend"), x = cv.getContext("2d"), W = cv.width, H = cv.height, P = 30;
+  x.clearRect(0, 0, W, H);
+  x.font = "11px sans-serif";
+  x.fillStyle = getComputedStyle(document.body).color;
+  if (!pts.length) { x.fillText("No moves recorded yet", P, H / 2); return; }
+  const top = Math.max(1, Math.ceil(Math.max(...pts.map(p => p.peak)))), sy = (H - 20) / top;
+  const sx = pts.length > 1 ? (W - P - 10) / (pts.length - 1) : 0;
+  x.strokeStyle = "#8884";
+  for (let a = 0; a <= top; a++) { const y = H - 10 - a * sy; x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.fillText(a + "A", 2, y + 4); }
+  [["peak", "#e57373"], ["run", "#1e88e5"]].forEach(([k, col]) => {
+    x.strokeStyle = col; x.fillStyle = col; x.beginPath();
+    pts.forEach((p, i) => { const X = P + i * sx, Y = H - 10 - p[k] * sy; i ? x.lineTo(X, Y) : x.moveTo(X, Y); });
+    x.stroke();
+    pts.forEach((p, i) => { x.beginPath(); x.arc(P + i * sx, H - 10 - p[k] * sy, 2.5, 0, 7); x.fill(); });
+  });
+}
+
+/* ---------- commands ---------- */
+function pin() {
+  if (!cfg.p) return "";
+  let p = ls("pin");
+  if (!p) { p = prompt("Door PIN"); if (p === null) return null; p = p.trim(); ls("pin", p); }
+  return p;
+}
+
+function overlay(html) {
+  let o = $("pz");
+  if (!o) { o = document.createElement("div"); o.id = "pz"; document.body.appendChild(o); }
+  o.innerHTML = html;
+}
+function closeOverlay() { const o = $("pz"); if (o) o.remove(); }
+
+async function send(cmd, label) {
+  const p = pin();
+  if (p === null) return;
+  busy = true;
+  const before = last ? last.entry_id : 0;
+  overlay(`${label} sent.<br><br>Waiting for the door…<br><span style="font-size:.8em">It checks for commands every 15 s; WiFi is off while it moves.</span>`);
+  try {
+    const r = await fetch(`${API}/talkbacks/${K.t}/commands.json`, {
+      method: "POST", body: new URLSearchParams({api_key: K.k, command_string: (cmd + " " + p).trim()})
+    });
+    if (!r.ok) throw new Error("ThingSpeak refused the command (HTTP " + r.status + ")");
+  } catch (e) {
+    closeOverlay(); busy = false; alert(e.message); return;
+  }
+  // Watch the channel for the board's answer: up to 90 s (pick-up + move + reconnect).
+  const t0 = Date.now();
+  while (Date.now() - t0 < 90000) {
+    await new Promise(res => setTimeout(res, 5000));
+    try {
+      const r = await fetch(`${API}/channels/${K.c}/feeds/last.json?api_key=${encodeURIComponent(K.r)}&status=true`, {cache: "no-store"});
+      const f = await r.json();
+      if (f && f.entry_id > before) {
+        const st = f.status || "";
+        if (/wrong PIN|PIN locked/i.test(st)) ls("pin", null);
+        const moving = /^(Opening|Closing) \(cloud\)/.test(st);
+        overlay(`${esc(st)}${moving ? "<br><br>Door is moving… waiting for it to finish." : ""}`);
+        if (!moving) { await new Promise(res => setTimeout(res, 2500)); break; }
+      }
+    } catch (e) { /* keep waiting */ }
+  }
+  closeOverlay(); busy = false; refresh();
+}
+
+function hold(id, cmd, label, sameStates) {
+  const b = $(id), bar = $(id + "b"); let t0 = 0;
+  function step() {
+    if (!t0) return;
+    const p = (Date.now() - t0) / (cfg.h * 1000);
+    bar.style.width = Math.min(p, 1) * 100 + "%";
+    if (p >= 1) { t0 = 0; bar.style.width = "0"; send(cmd, label); } else requestAnimationFrame(step);
+  }
+  b.onpointerdown = e => {
+    e.preventDefault();
+    const s = STATES[parseInt(last && last.field1) || 0];
+    if (sameStates.includes(s)) { alert("The door is already " + s.toLowerCase() + "."); return; }
+    t0 = Date.now(); busy = true; b.setPointerCapture(e.pointerId); requestAnimationFrame(step);
+  };
+  b.onpointerup = b.onpointercancel = () => { if (t0) { t0 = 0; bar.style.width = "0"; busy = false; } };
+  b.oncontextmenu = () => false;
+}
+hold("ob", "OPEN", "Open", ["OPEN", "OPENING"]);
+hold("cb", "CLOSE", "Close", ["CLOSED", "CLOSING"]);
+
+$("ssave").onclick = () => {
+  const s = +$("s1").value, n = +$("s2").value, h = +$("s3").value, o = Math.round(+$("s4").value * 1000);
+  if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 300 && o <= 8000)) { alert("A value is out of range."); return; }
+  $("setbox").open = false;
+  send(`SET ${s} ${n} ${h} ${o}`, "Settings");
+};
+
+/* ---------- start ---------- */
+if (loadKeys()) { $("main").hidden = false; refresh(); } else showSetup();
+setInterval(() => { if (!busy && !$("setbox").open && !$("main").hidden) refresh(); }, 30000);
+</script>
+</body>
+</html>
