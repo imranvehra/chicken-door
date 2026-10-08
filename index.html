@@ -313,6 +313,15 @@ $("ssave").onclick = () => {
 };
 
 /* ---------- start ---------- */
+/* Setup link: .../#c=<channel>&r=<read key>&t=<talkback id>&k=<talkback key> fills in the keys without the
+   form. The part after # never leaves the phone; it is removed from the address bar once saved. */
+(function setupFromLink() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("c") && h.get("r") && h.get("t") && h.get("k")) {
+    ls("ts_c", h.get("c")); ls("ts_r", h.get("r")); ls("ts_t", h.get("t")); ls("ts_k", h.get("k"));
+    history.replaceState(null, "", location.pathname);
+  }
+})();
 if (loadKeys()) { $("main").hidden = false; refresh(); } else showSetup();
 setInterval(() => { if (!busy && !$("setbox").open && !$("main").hidden) refresh(); }, 30000);
 // Phones pause hidden pages; refresh as soon as the app is looked at again (unlock, switching back).
