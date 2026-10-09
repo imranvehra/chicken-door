@@ -93,7 +93,7 @@
       <tr><td>Close after sunset (min)</td><td><input id="s1" type="number" min="0" max="180"></td></tr>
       <tr><td>If opened at night, close after (min)</td><td><input id="s2" type="number" min="1" max="120"></td></tr>
       <tr><td>Hold time for buttons (s)</td><td><input id="s3" type="number" min="1" max="10"></td></tr>
-      <tr><td>Obstruction limit (A)</td><td><input id="s4" type="number" step="0.05" min="0.1" max="8"></td></tr>
+      <tr><td>Obstruction: closing current above (% of normal)</td><td><input id="s4" type="number" step="10" min="120" max="1000"> <span id="s4a" class="muted"></span></td></tr>
     </table>
     <button id="ssave">Send settings to the door</button>
     <p class="muted">Calibration and PIN changes are only possible on the local page at the coop.</p>
@@ -108,7 +108,7 @@
 "use strict";
 const API = "https://api.thingspeak.com";
 const STATES = ["UNKNOWN", "OPENING", "OPEN", "CLOSING", "CLOSED"];
-let K = {}, feeds = [], last = null, cfg = {s: 30, n: 5, h: 5, o: 950, c: 0, p: 0}, busy = false;
+let K = {}, feeds = [], last = null, cfg = {s: 30, n: 5, h: 5, o: 200, c: 0, p: 0, r: 0}, busy = false;
 
 const $ = id => document.getElementById(id);
 function ls(k, v) {                       // localStorage can be unavailable (private mode): fail quietly
@@ -209,12 +209,12 @@ function render() {
   if (c.h) {
     cfg = Object.assign(cfg, c);
     if (!$("setbox").open) {
-      $("s1").value = cfg.s; $("s2").value = cfg.n; $("s3").value = cfg.h; $("s4").value = (cfg.o / 1000).toFixed(2);
+      $("s1").value = cfg.s; $("s2").value = cfg.n; $("s3").value = cfg.h; $("s4").value = cfg.o; showLimitAmps();
     }
   }
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
-  $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection works on the default limit only.";
+  $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection uses a fixed 2 A limit until it is.";
   // The door reports its current address, so this link follows it when the router hands out a new one.
   const ip = /^\d+\.\d+\.\d+\.\d+$/.test(c.ip || "") && c.ip !== "0.0.0.0" ? c.ip : "";
   $("local").innerHTML = ip ? `On the home WiFi: <a href="http://${ip}/">open the door's local page</a> (${ip}`
@@ -393,11 +393,18 @@ function hold(id, cmd, label, sameStates) {
 hold("ob", "OPEN", "Open", ["OPEN", "OPENING"]);
 hold("cb", "CLOSE", "Close", ["CLOSED", "CLOSING"]);
 
+/* What the obstruction % means in amps for the calibrated actuator (r = normal closing current, mA). */
+function showLimitAmps() {
+  $("s4a").textContent = cfg.c && cfg.r
+    ? `= ${(cfg.r * (+$("s4").value || 0) / 100000).toFixed(2)} A (normal ${(cfg.r / 1000).toFixed(2)} A)` : "";
+}
+$("s4").oninput = showLimitAmps;
+
 $("ssave").onclick = () => {
-  const s = +$("s1").value, n = +$("s2").value, h = +$("s3").value, o = Math.round(+$("s4").value * 1000);
-  if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 100 && o <= 8000)) { alert("A value is out of range."); return; }
+  const s = +$("s1").value, n = +$("s2").value, h = +$("s3").value, o = Math.round(+$("s4").value);
+  if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 120 && o <= 1000)) { alert("A value is out of range."); return; }
   $("setbox").open = false;
-  send(`SET ${s} ${n} ${h} ${o}`, "Settings");
+  send(`SET ${s} ${n} ${h} ${o}%`, "Settings");   // the obstruction limit is in % of normal current
 };
 
 /* ---------- start ---------- */
