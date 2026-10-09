@@ -93,7 +93,7 @@
       <tr><td>Close after sunset (min)</td><td><input id="s1" type="number" min="0" max="180"></td></tr>
       <tr><td>If opened at night, close after (min)</td><td><input id="s2" type="number" min="1" max="120"></td></tr>
       <tr><td>Hold time for buttons (s)</td><td><input id="s3" type="number" min="1" max="10"></td></tr>
-      <tr><td>Obstruction limit (A)</td><td><input id="s4" type="number" step="0.05" min="0.3" max="8"></td></tr>
+      <tr><td>Obstruction limit (A)</td><td><input id="s4" type="number" step="0.05" min="0.1" max="8"></td></tr>
     </table>
     <button id="ssave">Send settings to the door</button>
     <p class="muted">Calibration and PIN changes are only possible on the local page at the coop.</p>
@@ -235,9 +235,9 @@ function render() {
   drawTrend();
 }
 
-/* A real stroke always starts with the motor's ~4 A start-up spike. Reports with a lower peak come from a
-   "move" of a door that was already at its end (no current), so they are not counted as moves. */
-function isRealMove(f) { return parseFloat(f.field3) >= 1.0 && parseFloat(f.field5) > 0; }
+/* A real stroke runs for seconds. A "move" of a door that was already at its end draws no current, so its
+   running time is 0; those are not counted. (Not judged by the peak: small actuators peak below 1 A.) */
+function isRealMove(f) { return parseFloat(f.field5) >= 1.0 && parseFloat(f.field3) > 0; }
 
 /* One point per move: consecutive reports repeat the same last-move numbers, so only changes count. */
 function drawTrend() {
@@ -252,10 +252,15 @@ function drawTrend() {
   x.font = "11px sans-serif";
   x.fillStyle = getComputedStyle(document.body).color;
   if (!pts.length) { x.fillText("No moves recorded yet", P, H / 2); return; }
-  const top = Math.max(1, Math.ceil(Math.max(...pts.map(p => p.peak)))), sy = (H - 20) / top;
+  // Grid step to suit the actuator: whole amps for a big one, 0.1 A steps for one that peaks below 1 A.
+  const hi = Math.max(...pts.map(p => p.peak)), step = hi > 1 ? 1 : hi > 0.5 ? 0.25 : 0.1;
+  const top = Math.max(step, Math.ceil(hi / step) * step), sy = (H - 20) / top;
   const sx = pts.length > 1 ? (W - P - 10) / (pts.length - 1) : 0;
   x.strokeStyle = "#8884";
-  for (let a = 0; a <= top; a++) { const y = H - 10 - a * sy; x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.fillText(a + "A", 2, y + 4); }
+  for (let i = 0; i * step <= top + 1e-9; i++) {
+    const a = i * step, y = H - 10 - a * sy;
+    x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.fillText((step < 1 ? a.toFixed(step < 0.25 ? 1 : 2) : a) + "A", 2, y + 4);
+  }
   [["peak", "#e57373"], ["run", "#1e88e5"]].forEach(([k, col]) => {
     x.strokeStyle = col; x.fillStyle = col; x.beginPath();
     pts.forEach((p, i) => { const X = P + i * sx, Y = H - 10 - p[k] * sy; i ? x.lineTo(X, Y) : x.moveTo(X, Y); });
@@ -390,7 +395,7 @@ hold("cb", "CLOSE", "Close", ["CLOSED", "CLOSING"]);
 
 $("ssave").onclick = () => {
   const s = +$("s1").value, n = +$("s2").value, h = +$("s3").value, o = Math.round(+$("s4").value * 1000);
-  if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 300 && o <= 8000)) { alert("A value is out of range."); return; }
+  if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 100 && o <= 8000)) { alert("A value is out of range."); return; }
   $("setbox").open = false;
   send(`SET ${s} ${n} ${h} ${o}`, "Settings");
 };
