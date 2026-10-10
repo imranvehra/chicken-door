@@ -153,7 +153,9 @@ function fmtWhen(d) {
 async function refresh() {
   if (busy) return;
   try {
-    const r = await fetch(`${API}/channels/${K.c}/feeds.json?api_key=${encodeURIComponent(K.r)}&results=120&status=true`, {cache: "no-store"});
+    // ThingSpeak keeps a server-side copy of an identical request and re-serves it for a minute or more:
+    // a unique "t" makes every read fresh.
+    const r = await fetch(`${API}/channels/${K.c}/feeds.json?api_key=${encodeURIComponent(K.r)}&results=120&status=true&t=${Date.now()}`, {cache: "no-store"});
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     feeds = j.feeds || [];
@@ -374,7 +376,7 @@ async function checkPend() {
   if (!pend) return;
   if (!pend.picked) {
     try {
-      const r = await fetch(`${API}/talkbacks/${K.t}/commands.json?api_key=${encodeURIComponent(K.k)}`, {cache: "no-store"});
+      const r = await fetch(`${API}/talkbacks/${K.t}/commands.json?api_key=${encodeURIComponent(K.k)}&t=${Date.now()}`, {cache: "no-store"});
       if (r.ok) {
         const c = (await r.json()).map(x => x.command || x).find(x => x.id === pend.id);
         if (!c || c.executed_at) { pend.picked = Date.now(); savePend(); }   // taken commands leave the queue
