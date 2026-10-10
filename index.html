@@ -176,12 +176,20 @@ function render() {
 
   const s = Math.max(0, Math.min(4, parseInt(last.field1) || 0));
   resolvePend();
+  const moving = s === 1 || s === 3; // the board reported "moving" just before WiFi went off for the move
   if (pend && pend.cmd !== "SET") {
-    // The last report is from before the command: show what is happening instead of the old state.
+    // The last report is from before the command (or says the door is moving): show what is happening,
+    // never the old state.
     const op = pend.cmd === "OPEN";
     $("state").className = "st s" + (op ? 1 : 3);
-    $("state").innerHTML = (pend.picked ? (op ? "Opening…" : "Closing…") : pend.cmd + " sent…")
-      + `<small>was ${STATES[s]}</small>`;
+    $("state").innerHTML = (pend.picked || moving ? (op ? "Opening…" : "Closing…") : pend.cmd + " sent…")
+      + "<small>waiting for the door's report</small>";
+  } else if (moving) {
+    // A move started elsewhere (local page, automatic close): WiFi is off until it is done.
+    $("state").className = "st s" + s;
+    $("state").innerHTML = (s === 1 ? "Opening…" : "Closing…")
+      + (ageMin > 3 ? `<small>no report for ${Math.round(ageMin)} min - check the door</small>`
+                    : "<small>waiting for the door's report</small>");
   } else {
     $("state").className = "st s" + s;
     $("state").textContent = "Currently " + STATES[s];
@@ -193,7 +201,7 @@ function render() {
 
   // Field 6: minutes from that report until the next automatic close, and why ("5 night" / "1290 sunset").
   const m = (last.field6 || "").match(/^(\d+)\s+(night|sunset)$/);
-  if (pend && pend.cmd !== "SET") $("next").textContent = "";
+  if ((pend && pend.cmd !== "SET") || moving) $("next").textContent = "";
   else if (s === 4 || s === 3) $("next").textContent = "Stays closed until you open it";
   else if (m) {
     const at = new Date(t.getTime() + (+m[1]) * 60000);
@@ -310,6 +318,11 @@ async function send(cmd, label) {
    before it, or any report made after the door took the command. */
 function resolvePend() {
   if (!pend) return;
+  // "Door moving" (reported just before WiFi goes off) means the command was taken, not that it is done.
+  if (last && last.entry_id > pend.before && (last.field1 === "1" || last.field1 === "3")) {
+    if (!pend.picked) { pend.picked = new Date(last.created_at).getTime(); savePend(); }
+    return;
+  }
   if (last && last.entry_id > pend.before
       && ((last.status || "") !== pend.bst || last.field1 !== pend.bs
           || (pend.picked && new Date(last.created_at).getTime() > pend.picked))) {
