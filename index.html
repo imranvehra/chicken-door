@@ -49,6 +49,10 @@
   .pend.bad { border-left-color: var(--alarm); } .pend button { font-size: 1em; padding: 10px; }
   .st small { display: block; font-size: .45em; opacity: .9; }
   ul { padding-left: 18px; margin: 4px 0; } li { margin: 3px 0; }
+  .seg { display: flex; gap: 6px; margin: 6px 0; } .seg button { font-size: 1em; padding: 8px; margin: 0; }
+  .seg button.on { background: var(--closed); color: #fff; border-color: var(--closed); }
+  body.lab .seg button.on { background: #6a1b9a; border-color: #6a1b9a; } body.lab h2 { color: #6a1b9a; }
+  select { font-size: 1em; padding: 4px; width: 100%; }
 </style>
 </head>
 <body>
@@ -57,6 +61,7 @@
   <h2>Chicken Door <span class="tag">setup</span></h2>
   <p class="muted">Enter your ThingSpeak details once. They are stored only in this browser on this phone.</p>
   <div class="card keys">
+    <p>Door<br><select id="kd"><option value="coop">Coop (SN2)</option><option value="lab">Lab (SN1)</option></select></p>
     <p>Channel ID<br><input id="kc" inputmode="numeric"></p>
     <p>Channel Read API Key<br><input id="kr" autocomplete="off"></p>
     <p>TalkBack ID<br><input id="kt" inputmode="numeric"></p>
@@ -66,7 +71,8 @@
 </div>
 
 <div id="main" hidden>
-  <h2>Imran's Chicken Door <span class="tag">remote</span></h2>
+  <h2>Imran's Chicken Door <span class="tag" id="dname">remote</span></h2>
+  <div class="seg" id="dsel" hidden><button data-d="coop">Coop</button><button data-d="lab">Lab</button></div>
   <div class="muted" id="fresh" title="Tap to refresh">Loading…</div>
   <div id="offline"></div>
   <div id="state" class="st s0">…</div>
@@ -114,7 +120,8 @@
 "use strict";
 const API = "https://api.thingspeak.com";
 const STATES = ["UNKNOWN", "OPENING", "OPEN", "CLOSING", "CLOSED"];
-let K = {}, feeds = [], last = null, cfg = {s: 30, n: 5, h: 5, o: 200, c: 0, p: 0, r: 0}, busy = false;
+const CFG0 = {s: 30, n: 5, h: 5, o: 200, c: 0, p: 0, r: 0};
+let K = {}, feeds = [], last = null, cfg = Object.assign({}, CFG0), busy = false;
 
 const $ = id => document.getElementById(id);
 function ls(k, v) {                       // localStorage can be unavailable (private mode): fail quietly
@@ -122,24 +129,50 @@ function ls(k, v) {                       // localStorage can be unavailable (pr
   catch (e) {}
   return null;
 }
+/* Two boards, each with its own ThingSpeak channel + TalkBack: "coop" (SN2) and "lab" (SN1). Every stored
+   item (keys, PIN, waiting command) is per door; the coop keeps the original names. */
+const DOORS = {coop: "Coop", lab: "Lab"};
+let door = DOORS[ls("door")] ? ls("door") : "coop", gen = 0;
+function dk(name, d) { return (d || door) === "coop" ? name : name + "_lab"; }
+function hasKeys(d) { return ["ts_c", "ts_r", "ts_t", "ts_k"].every(n => ls(dk(n, d))); }
+function showDoorUI() {
+  document.body.classList.toggle("lab", door === "lab");
+  $("dname").textContent = DOORS[door];
+  document.title = DOORS[door] + " - Chicken Door";
+  $("dsel").hidden = !(hasKeys("coop") && hasKeys("lab"));   // only when both doors are set up
+  $("dsel").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.d === door));
+}
+function selectDoor(d) {
+  if (busy) return;
+  door = d; ls("door", d); gen++;
+  feeds = []; last = null; done = null; cfg = Object.assign({}, CFG0); clearTimeout(watchTimer);
+  $("fresh").textContent = "Loading…"; $("state").className = "st s0"; $("state").textContent = "…";
+  ["offline", "pend", "alarm", "batt", "next", "events", "calinfo", "local"].forEach(id => $(id).innerHTML = "");
+  $("bv").textContent = $("lv").textContent = $("lastmove").textContent = "–";
+  start();
+}
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
 /* ---------- keys ---------- */
 function loadKeys() {
-  K = {c: ls("ts_c"), r: ls("ts_r"), t: ls("ts_t"), k: ls("ts_k")};
+  K = {c: ls(dk("ts_c")), r: ls(dk("ts_r")), t: ls(dk("ts_t")), k: ls(dk("ts_k"))};
   return K.c && K.r && K.t && K.k;
 }
 function showSetup() {
   $("main").hidden = true; $("setup").hidden = false;
+  $("kd").value = door;
   $("kc").value = K.c || ""; $("kr").value = K.r || ""; $("kt").value = K.t || ""; $("kk").value = K.k || "";
 }
+$("kd").onchange = () => { door = $("kd").value; loadKeys(); showSetup(); };   // show that door's saved keys
 $("ksave").onclick = () => {
-  ls("ts_c", $("kc").value.trim()); ls("ts_r", $("kr").value.trim()); ls("ts_t", $("kt").value.trim()); ls("ts_k", $("kk").value.trim());
-  if (loadKeys()) { $("setup").hidden = true; $("main").hidden = false; refresh(); }
+  door = $("kd").value; ls("door", door);
+  ls(dk("ts_c"), $("kc").value.trim()); ls(dk("ts_r"), $("kr").value.trim()); ls(dk("ts_t"), $("kt").value.trim()); ls(dk("ts_k"), $("kk").value.trim());
+  if (hasKeys(door)) selectDoor(door);
 };
+$("dsel").onclick = e => { const d = e.target.dataset && e.target.dataset.d; if (d && d !== door) selectDoor(d); };
 $("fresh").onclick = () => { if (pend) checkPend(); else refresh(); };   // tap the "Updated" line to refresh now
 $("kedit").onclick = e => { e.preventDefault(); showSetup(); };
-$("pforget").onclick = e => { e.preventDefault(); ls("pin", null); alert("PIN forgotten on this phone."); };
+$("pforget").onclick = e => { e.preventDefault(); ls(dk("pin"), null); alert("PIN for the " + DOORS[door] + " door forgotten on this phone."); };
 
 /* ---------- reading the channel ---------- */
 function parseCfg(f8) {
@@ -158,16 +191,19 @@ function fmtWhen(d) {
 
 async function refresh() {
   if (busy) return;
+  const g = gen;
   try {
     // ThingSpeak keeps a server-side copy of an identical request and re-serves it for a minute or more:
     // a unique "t" makes every read fresh.
     const r = await fetch(`${API}/channels/${K.c}/feeds.json?api_key=${encodeURIComponent(K.r)}&results=120&status=true&t=${Date.now()}`, {cache: "no-store"});
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
+    if (g !== gen) return;   // the door was switched meanwhile
     feeds = j.feeds || [];
     last = feeds[feeds.length - 1] || null;
     render();
   } catch (e) {
+    if (g !== gen) return;
     $("fresh").textContent = "Cannot reach ThingSpeak (" + e.message + "). Check the phone's internet and the keys.";
     showPend();
   }
@@ -242,7 +278,7 @@ function render() {
   // The door reports its current address, so this link follows it when the router hands out a new one.
   const ip = /^\d+\.\d+\.\d+\.\d+$/.test(c.ip || "") && c.ip !== "0.0.0.0" ? c.ip : "";
   $("local").innerHTML = ip ? `On the home WiFi: <a href="http://${ip}/">open the door's local page</a> (${ip}`
-    + (c.m ? `, also <a href="http://chickendoor.local/">chickendoor.local</a>` : "") + ") — calibration and PIN changes" : "";
+    + (c.m ? `, also <a href="http://${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local/">${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local</a>` : "") + ") — calibration and PIN changes" : "";
 
   const lm = [...feeds].reverse().find(isRealMove);
   $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: peak ${lm.field3} A, running ${lm.field4} A, ${lm.field5} s` : "–";
@@ -296,8 +332,8 @@ function drawTrend() {
 /* ---------- commands ---------- */
 function pin() {
   if (!cfg.p) return "";
-  let p = ls("pin");
-  if (!p) { p = prompt("Door PIN"); if (p === null) return null; p = p.trim(); ls("pin", p); }
+  let p = ls(dk("pin"));
+  if (!p) { p = prompt(DOORS[door] + " door PIN"); if (p === null) return null; p = p.trim(); ls(dk("pin"), p); }
   return p;
 }
 
@@ -307,8 +343,8 @@ function pin() {
 const PICKUP_WARN_MS = 2 * 60000;   // not taken by then: the door is probably offline
 const RESULT_GIVEUP_MS = 10 * 60000; // taken but no report by then: stop waiting
 let pend = null, done = null, watchTimer = 0;
-function loadPend() { try { pend = JSON.parse(ls("pend") || "null"); } catch (e) { pend = null; } }
-function savePend() { ls("pend", pend ? JSON.stringify(pend) : null); }
+function loadPend() { try { pend = JSON.parse(ls(dk("pend")) || "null"); } catch (e) { pend = null; } }
+function savePend() { ls(dk("pend"), pend ? JSON.stringify(pend) : null); }
 
 async function send(cmd, label) {
   if (pend) { alert(`Still waiting for the door to answer the ${pend.label} command.`); return; }
@@ -343,7 +379,7 @@ function resolvePend() {
       && ((last.status || "") !== pend.bst || last.field1 !== pend.bs
           || (pend.picked && new Date(last.created_at).getTime() > pend.picked))) {
     const st = last.status || "";
-    if (/wrong PIN|PIN locked/i.test(st)) ls("pin", null);
+    if (/wrong PIN|PIN locked/i.test(st)) ls(dk("pin"), null);
     done = {text: st, bad: /refused|already|ignored|expired|unknown|PIN|OBSTRUCTION|TIMEOUT|Gave up/i.test(st), at: Date.now()};
     pend = null; savePend();
   } else if (pend.picked && Date.now() - pend.picked > RESULT_GIVEUP_MS) {
@@ -438,23 +474,27 @@ $("ssave").onclick = () => {
 };
 
 /* ---------- start ---------- */
-/* Setup link: .../#c=<channel>&r=<read key>&t=<talkback id>&k=<talkback key> fills in the keys without the
-   form. The part after # never leaves the phone; it is removed from the address bar once saved. */
+/* Setup link: .../#door=lab&c=<channel>&r=<read key>&t=<talkback id>&k=<talkback key> fills in the keys without
+   the form ("door" left out = coop).
+   The part after # never leaves the phone; it is removed from the address bar once saved. */
 function setupFromLink() {
   const h = new URLSearchParams(location.hash.slice(1));
   if (h.get("c") && h.get("r") && h.get("t") && h.get("k")) {
-    ls("ts_c", h.get("c")); ls("ts_r", h.get("r")); ls("ts_t", h.get("t")); ls("ts_k", h.get("k"));
+    const d = DOORS[h.get("door")] ? h.get("door") : "coop";
+    ls(dk("ts_c", d), h.get("c")); ls(dk("ts_r", d), h.get("r")); ls(dk("ts_t", d), h.get("t")); ls(dk("ts_k", d), h.get("k"));
+    door = d; ls("door", d);
     history.replaceState(null, "", location.pathname);
   }
 }
 function start() {
   setupFromLink();
   loadPend();
+  showDoorUI();
   if (loadKeys()) { $("setup").hidden = true; $("main").hidden = false; if (pend) checkPend(); else refresh(); } else showSetup();
 }
 start();
 // Opening the setup link while the app is already open only changes the part after #: handle that too.
-window.addEventListener("hashchange", start);
+window.addEventListener("hashchange", () => selectDoor(door));
 // Every 30 s; every 5 s while the last report says the door is moving (its result is due within a minute).
 let lastRefresh = 0;
 setInterval(() => {
