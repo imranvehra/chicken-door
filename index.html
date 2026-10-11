@@ -274,7 +274,7 @@ function render() {
   }
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
-  $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection uses a fixed 2 A limit until it is.";
+  $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection uses a fixed limit until it is.";
   // The door reports its current address, so this link follows it when the router hands out a new one.
   const ip = /^\d+\.\d+\.\d+\.\d+$/.test(c.ip || "") && c.ip !== "0.0.0.0" ? c.ip : "";
   $("local").innerHTML = ip ? `On the home WiFi: <a href="http://${ip}/">open the door's local page</a> (${ip}`
