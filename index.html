@@ -72,6 +72,7 @@
   <div id="state" class="st s0">…</div>
   <div id="pend"></div>
   <div id="alarm"></div>
+  <div id="batt"></div>
   <p id="next"></p>
 
   <!-- The hold bars sit above the buttons, where the finger does not cover them. -->
@@ -84,6 +85,11 @@
     <canvas id="trend" width="440" height="180"></canvas>
     <div class="muted">Motor current of recent moves: blue = running, red = peak (start-up spike)</div>
   </div>
+
+  <div class="card"><table>
+    <tr><td>Battery</td><td id="bv">–</td></tr>
+    <tr><td>Daylight</td><td id="lv">–</td></tr>
+  </table></div>
 
   <div class="card"><b>Recent events</b><ul id="events"></ul></div>
 
@@ -139,7 +145,7 @@ $("pforget").onclick = e => { e.preventDefault(); ls("pin", null); alert("PIN fo
 function parseCfg(f8) {
   const c = {};
   (f8 || "").split(/\s+/).forEach(kv => {
-    const m = kv.match(/^(\w+)=([\d.]+)$/);
+    const m = kv.match(/^(\w+)=(-?[\d.]+)$/);
     if (m) c[m[1]] = m[1] === "ip" ? m[2] : +m[2];   // ip = the door's address on the home network
   });
   return c;
@@ -221,6 +227,14 @@ function render() {
     if (!$("setbox").open) {
       $("s1").value = cfg.s; $("s2").value = cfg.n; $("s3").value = cfg.h; $("s4").value = (cfg.o / 100).toFixed(1); showLimitAmps();   // stored in %, shown as 2.0x
     }
+  }
+  // Sensors (boards from 2026-10-11 on): b = battery level 0 none / 1 OK / 2 low / 3 critical (close only).
+  if (c.b !== undefined) {
+    const b = c.b, v = (c.v / 1000).toFixed(2) + " V";
+    $("bv").innerHTML = b ? (b >= 2 ? `<b>${v} (${b === 3 ? "CRITICAL" : "LOW"})</b>` : v + " (OK)") : "not connected";
+    $("batt").innerHTML = b === 3 ? `<div class="al">&#9888; Battery critical (${v}): the door will only close until it is charged.</div>`
+      : b === 2 ? `<div class="warn">&#9888; Battery low (${v}): check the charger.</div>` : "";
+    $("lv").textContent = (c.l / 10).toFixed(1) + " %" + (c.d >= 0 ? ` · at closing time ${(c.d / 10).toFixed(1)} %` : "");
   }
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
@@ -400,6 +414,7 @@ function hold(id, cmd, label, sameStates) {
     if (pend) { alert(`Still waiting for the door to answer the ${pend.label} command.`); return; }
     const s = STATES[parseInt(last && last.field1) || 0];
     if (sameStates.includes(s)) { alert("The door is already " + s.toLowerCase() + "."); return; }
+    if (cmd === "OPEN" && cfg.b === 3) { alert("Battery critical: the door will only close until it is charged."); return; }
     t0 = Date.now(); busy = true; b.setPointerCapture(e.pointerId); requestAnimationFrame(step);
   };
   b.onpointerup = b.onpointercancel = () => { if (t0) { t0 = 0; bar.style.width = "0"; busy = false; } };
