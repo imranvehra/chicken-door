@@ -221,7 +221,7 @@ function render() {
 
   const s = Math.max(0, Math.min(4, parseInt(last.field1) || 0));
   resolvePend();
-  const moving = s === 1 || s === 3; // the board reported "moving" just before WiFi went off for the move
+  const moving = s === 1 || s === 3; // the board reported that the door is moving
   if (pend && pend.cmd !== "SET") {
     // The last report is from before the command (or says the door is moving): show what is happening,
     // never the old state.
@@ -230,7 +230,7 @@ function render() {
     $("state").innerHTML = (pend.picked || moving ? (op ? "Opening…" : "Closing…") : pend.cmd + " sent…")
       + "<small>waiting for the door's report</small>";
   } else if (moving) {
-    // A move started elsewhere (local page, automatic close): WiFi is off until it is done.
+    // A move started elsewhere (local page, automatic close): its result follows when the door stops.
     $("state").className = "st s" + s;
     $("state").innerHTML = (s === 1 ? "Opening…" : "Closing…")
       + (ageMin > 3 ? `<small>no report for ${Math.round(ageMin)} min - check the door</small>`
@@ -339,8 +339,8 @@ function pin() {
 }
 
 /* A sent command stays "pending" (also saved on the phone, so closing the app does not lose it) until the
-   door reports back. The door switches WiFi off while it moves, so its only report comes once it has
-   finished: about a minute after sending. Stages: queued at ThingSpeak → taken by the door → result. */
+   door reports back: it reports "moving" when it starts and the result when it stops, about half a minute
+   later. Stages: queued at ThingSpeak → taken by the door → result. */
 const PICKUP_WARN_MS = 2 * 60000;   // not taken by then: the door is probably offline
 const RESULT_GIVEUP_MS = 10 * 60000; // taken but no report by then: stop waiting
 let pend = null, done = null, watchTimer = 0;
@@ -371,7 +371,7 @@ async function send(cmd, label) {
    before it, or any report made after the door took the command. */
 function resolvePend() {
   if (!pend) return;
-  // "Door moving" (reported just before WiFi goes off) means the command was taken, not that it is done.
+  // "Door moving" means the command was taken, not that it is done.
   if (last && last.entry_id > pend.before && (last.field1 === "1" || last.field1 === "3")) {
     if (!pend.picked) { pend.picked = new Date(last.created_at).getTime(); savePend(); }
     return;
@@ -396,7 +396,7 @@ function showPend() {
     let h;
     if (pend.picked) {
       h = `The door took the <b>${esc(pend.label)}</b> command at ${fmtTime(new Date(pend.picked))}. `
-        + (pend.cmd === "SET" ? "Waiting for its report…" : "WiFi is off while it moves; the result comes in about a minute.");
+        + (pend.cmd === "SET" ? "Waiting for its report…" : "The result comes when the door stops, in about half a minute.");
     } else {
       h = `<b>${esc(pend.label)}</b> sent at ${sent}. Waiting for the door to take it (it checks every 15 s)…`;
       if (wait > PICKUP_WARN_MS) h += `<br><b>Not taken after ${Math.round(wait / 60000)} min: the door may be offline.</b> `
