@@ -41,7 +41,7 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 10px 0; }
   table { width: 100%; border-collapse: collapse; } td { padding: 3px 4px; vertical-align: top; }
   td:first-child { color: var(--muted); white-space: nowrap; }
-  canvas { width: 100%; height: 180px; }
+  canvas { width: 100%; height: 120px; }
   input { font-size: 1em; width: 6em; padding: 4px; }
   .keys input { width: 100%; }
   .set { display: block; color: var(--muted); margin: 10px 0; } .set input { display: block; margin-top: 4px; }
@@ -90,8 +90,11 @@
   <div class="card">
     <b>Last move</b>
     <div id="lastmove" class="muted">–</div>
-    <canvas id="trend" width="440" height="180"></canvas>
-    <div class="muted">Motor current of recent moves: blue = running, red = peak (start-up spike)</div>
+    <div class="muted" style="margin-top:8px">Start-up peak (first 0.5 s): a door stuck from the start shows here</div>
+    <canvas id="trendS" width="440" height="120"></canvas>
+    <div class="muted">Highest running current (after start-up): an obstruction shows here</div>
+    <canvas id="trendR" width="440" height="120"></canvas>
+    <div class="muted">One point per move, oldest left. Dashed: closing obstruction limit (fixed part).</div>
   </div>
 
   <div class="card"><table>
@@ -282,7 +285,7 @@ function render() {
     + (c.m ? `, also <a href="http://${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local/">${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local</a>` : "") + ") — calibration and PIN changes" : "";
 
   const lm = [...feeds].reverse().find(isRealMove);
-  $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: peak ${lm.field3} A, running ${lm.field4} A, ${lm.field5} s` : "–";
+  $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: start-up ${lm.field3} A, running max ${lm.field4} A, ${lm.field5} s` : "–";
 
   // Events: the status text of each report, newest first, without repeats.
   const ev = []; let prev = null;
@@ -300,7 +303,9 @@ function render() {
    running time is 0; those are not counted. (Not judged by the peak: small actuators peak below 1 A.) */
 function isRealMove(f) { return parseFloat(f.field5) >= 1.0 && parseFloat(f.field3) > 0; }
 
-/* One point per move: consecutive reports repeat the same last-move numbers, so only changes count. */
+/* One point per move: consecutive reports repeat the same last-move numbers, so only changes count.
+   Field 3 = start-up peak, field 4 = highest running current after the start-up (before 2026-10-14 the
+   average). Two charts, each on its own scale: the start-up peak is ~10x the running current. */
 function drawTrend() {
   const pts = []; let key = "";
   feeds.forEach(f => {
@@ -308,26 +313,35 @@ function drawTrend() {
     const k = f.field3 + "|" + f.field4 + "|" + f.field5;
     if (k !== key) { pts.push({run: +f.field4, peak: +f.field3}); key = k; }
   });
-  const cv = $("trend"), x = cv.getContext("2d"), W = cv.width, H = cv.height, P = 30;
+  drawSeries("trendS", pts.map(p => p.peak), "#e57373", 0);
+  // The fixed part of the closing obstruction limit: calibrated closing current x setting (r in mA, o in %).
+  drawSeries("trendR", pts.map(p => p.run), "#1e88e5", cfg.c && cfg.r ? cfg.r * cfg.o / 100000 : 0);
+}
+
+function drawSeries(id, v, col, limit) {
+  const cv = $(id), x = cv.getContext("2d"), W = cv.width, H = cv.height, P = 40;
   x.clearRect(0, 0, W, H);
   x.font = "11px sans-serif";
   x.fillStyle = getComputedStyle(document.body).color;
-  if (!pts.length) { x.fillText("No moves recorded yet", P, H / 2); return; }
-  // Grid step to suit the actuator: whole amps for a big one, 0.1 A steps for one that peaks below 1 A.
-  const hi = Math.max(...pts.map(p => p.peak)), step = hi > 1 ? 1 : hi > 0.5 ? 0.25 : 0.1;
-  const top = Math.max(step, Math.ceil(hi / step) * step), sy = (H - 20) / top;
-  const sx = pts.length > 1 ? (W - P - 10) / (pts.length - 1) : 0;
+  if (!v.length) { x.fillText("No moves recorded yet", P, H / 2); return; }
+  // A grid step to suit the values, from 10 mA for a small actuator's running current to 1 A.
+  const hi = Math.max(...v, limit * 1.1, 0.001);
+  const step = [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2].find(s => hi / s <= 5) || 5;
+  const top = Math.ceil(hi / step) * step, sy = (H - 20) / top, dec = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+  const sx = v.length > 1 ? (W - P - 10) / (v.length - 1) : 0;
   x.strokeStyle = "#8884";
   for (let i = 0; i * step <= top + 1e-9; i++) {
     const a = i * step, y = H - 10 - a * sy;
-    x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.fillText((step < 1 ? a.toFixed(step < 0.25 ? 1 : 2) : a) + "A", 2, y + 4);
+    x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.fillText(a.toFixed(step < 0.1 ? 2 : dec) + "A", 2, y + 4);
   }
-  [["peak", "#e57373"], ["run", "#1e88e5"]].forEach(([k, col]) => {
-    x.strokeStyle = col; x.fillStyle = col; x.beginPath();
-    pts.forEach((p, i) => { const X = P + i * sx, Y = H - 10 - p[k] * sy; i ? x.lineTo(X, Y) : x.moveTo(X, Y); });
-    x.stroke();
-    pts.forEach((p, i) => { x.beginPath(); x.arc(P + i * sx, H - 10 - p[k] * sy, 2.5, 0, 7); x.fill(); });
-  });
+  if (limit > 0) {
+    const y = H - 10 - limit * sy;
+    x.strokeStyle = "#ef6c00"; x.setLineDash([5, 4]); x.beginPath(); x.moveTo(P, y); x.lineTo(W - 5, y); x.stroke(); x.setLineDash([]);
+  }
+  x.strokeStyle = col; x.fillStyle = col; x.beginPath();
+  v.forEach((q, i) => { const X = P + i * sx, Y = H - 10 - q * sy; i ? x.lineTo(X, Y) : x.moveTo(X, Y); });
+  x.stroke();
+  v.forEach((q, i) => { x.beginPath(); x.arc(P + i * sx, H - 10 - q * sy, 2.5, 0, 7); x.fill(); });
 }
 
 /* ---------- commands ---------- */
