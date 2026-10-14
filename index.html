@@ -100,6 +100,7 @@
   <div class="card"><table>
     <tr><td>Battery</td><td id="bv">–</td></tr>
     <tr><td>Daylight</td><td id="lv">–</td></tr>
+    <tr><td>WiFi signal</td><td id="wv">–</td></tr>
   </table></div>
 
   <div class="card"><b>Recent events</b><ul id="events"></ul></div>
@@ -152,7 +153,7 @@ function selectDoor(d) {
   feeds = []; last = null; done = null; cfg = Object.assign({}, CFG0); clearTimeout(watchTimer);
   $("fresh").textContent = "Loading…"; $("state").className = "st s0"; $("state").textContent = "…";
   ["offline", "pend", "alarm", "batt", "next", "events", "calinfo", "local"].forEach(id => $(id).innerHTML = "");
-  $("bv").textContent = $("lv").textContent = $("lastmove").textContent = "–";
+  $("bv").textContent = $("lv").textContent = $("wv").textContent = $("lastmove").textContent = "–";
   start();
 }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
@@ -275,6 +276,11 @@ function render() {
     $("batt").innerHTML = b === 3 ? `<div class="al">&#9888; Battery critical (${v}): the door will only close until it is charged.</div>`
       : b === 2 ? `<div class="warn">&#9888; Battery low (${v}): check the charger.</div>` : "";
     $("lv").textContent = (c.l / 10).toFixed(1) + " %" + (c.d >= 0 ? ` · at closing time ${(c.d / 10).toFixed(1)} %` : "");
+  }
+  // w = the door's WiFi signal in dBm: below -70 the link gets unreliable (pages cut off, slow replies).
+  if (c.w) {
+    const q = c.w >= -60 ? "good" : c.w >= -70 ? "fair" : c.w >= -80 ? "weak" : "very weak";
+    $("wv").innerHTML = c.w < -70 ? `<b>${c.w} dBm (${q})</b>` : `${c.w} dBm (${q})`;
   }
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
