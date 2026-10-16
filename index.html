@@ -90,10 +90,10 @@
   <div class="card">
     <b>Last move</b>
     <div id="lastmove" class="muted">–</div>
-    <div class="muted" style="margin-top:8px">Start-up peak (first 0.5 s): a door stuck from the start shows here</div>
-    <canvas id="trendS" width="440" height="120"></canvas>
-    <div class="muted">Highest running current (after start-up): an obstruction shows here</div>
-    <canvas id="trendR" width="440" height="120"></canvas>
+    <div class="muted" style="margin-top:8px">Opening: highest running current after the start-up</div>
+    <canvas id="trendO" width="440" height="120"></canvas>
+    <div class="muted">Closing: highest running current after the start-up (an obstruction shows here)</div>
+    <canvas id="trendC" width="440" height="120"></canvas>
     <div class="muted">One point per move, oldest left. Dashed: closing obstruction limit (fixed part).</div>
   </div>
 
@@ -119,7 +119,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-14b (WiFi signal)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-15 (open / close charts)</p>
 </div>
 
 <script>
@@ -292,7 +292,12 @@ function render() {
     + (c.m ? `, also <a href="http://${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local/">${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local</a>` : "") + ") — calibration and PIN changes" : "";
 
   const lm = [...feeds].reverse().find(isRealMove);
-  $("lastmove").textContent = lm ? `${fmtWhen(new Date(lm.created_at))}: start-up ${lm.field3} A, running max ${lm.field4} A, ${lm.field5} s` : "–";
+  // The last open and the last close, each with its start-up peak as a number (no history needed: a door
+  // stuck from the start keeps drawing current after the start-up and shows in the running maximum).
+  const lastOf = d => [...feeds].reverse().find(f => isRealMove(f) && moveDir(f) === d);
+  const lo = lastOf(1), lc = lastOf(-1), line = (n, f) => f
+    ? `${n} ${fmtWhen(new Date(f.created_at))}: start-up ${f.field3} A, running max ${f.field4} A, ${f.field5} s` : `${n}: –`;
+  $("lastmove").innerHTML = esc(line("Open", lo)) + "<br>" + esc(line("Close", lc));
 
   // Events: the status text of each report, newest first, without repeats.
   const ev = []; let prev = null;
@@ -310,19 +315,27 @@ function render() {
    running time is 0; those are not counted. (Not judged by the peak: small actuators peak below 1 A.) */
 function isRealMove(f) { return parseFloat(f.field5) >= 1.0 && parseFloat(f.field3) > 0; }
 
+/* Direction of the move in fields 3-5: "md" in field 8 (boards from 2026-10-15), otherwise the door's state
+   in that report (2 = open, 4 = closed). */
+function moveDir(f) {
+  const c = parseCfg(f.field8);
+  if (c.md === 1 || c.md === -1) return c.md;
+  return f.field1 === "2" ? 1 : f.field1 === "4" ? -1 : 0;
+}
+
 /* One point per move: consecutive reports repeat the same last-move numbers, so only changes count.
-   Field 3 = start-up peak, field 4 = highest running current after the start-up (before 2026-10-14 the
-   average). Two charts, each on its own scale: the start-up peak is ~10x the running current. */
+   Field 4 = highest running current after the start-up (before 2026-10-14 the average). Opening and closing
+   in separate charts: they differ (the door's weight helps one way), and only closing has an obstruction limit. */
 function drawTrend() {
-  const pts = []; let key = "";
+  const open = [], close = []; let key = "";
   feeds.forEach(f => {
     if (!isRealMove(f)) return;
-    const k = f.field3 + "|" + f.field4 + "|" + f.field5;
-    if (k !== key) { pts.push({run: +f.field4, peak: +f.field3}); key = k; }
+    const d = moveDir(f), k = d + "|" + f.field3 + "|" + f.field4 + "|" + f.field5;
+    if (k !== key && d) { (d > 0 ? open : close).push(+f.field4); key = k; }
   });
-  drawSeries("trendS", pts.map(p => p.peak), "#e57373", 0);
+  drawSeries("trendO", open, "#2e7d32", 0);
   // The fixed part of the closing obstruction limit: calibrated closing current x setting (r in mA, o in %).
-  drawSeries("trendR", pts.map(p => p.run), "#1e88e5", cfg.c && cfg.r ? cfg.r * cfg.o / 100000 : 0);
+  drawSeries("trendC", close, "#1e88e5", cfg.c && cfg.r ? cfg.r * cfg.o / 100000 : 0);
 }
 
 function drawSeries(id, v, col, limit) {
