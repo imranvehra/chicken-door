@@ -117,6 +117,11 @@
     <label class="set" style="display:flex;align-items:center;gap:8px"><input id="s6" type="checkbox" style="width:auto;margin:0">
       Sunlight close: when the clock cannot be trusted, close by the light sensor</label>
     <label class="set">Sunset light level (%, blank = automatic from the sunlight history)<span class="row"><input id="s7" type="number" step="0.1" min="0" max="100" inputmode="decimal"> <span id="s7a" class="muted"></span></span></label>
+    <details id="sunbox" class="card" style="margin:8px 0">
+      <summary>Sunlight history</summary>
+      <div id="suntbl" class="muted">Loading…</div>
+    </details>
+    <p class="muted" id="sunlink"></p>
     <label class="set">Obstruction: closing current above (× normal, 1.2-10)<span class="row"><input id="s4" type="number" step="0.1" min="1.2" max="10" inputmode="decimal"> <span id="s4a" class="muted"></span></span></label>
     <button id="ssave">Send settings to the door</button>
     <p class="muted">Calibration and PIN changes are only possible on the local page at the coop.</p>
@@ -125,7 +130,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-17 (sunlight close)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-17c (sunlight history)</p>
 </div>
 
 <script>
@@ -314,6 +319,9 @@ function render() {
   $("calinfo").textContent = cfg.c ? "" : "The door is not calibrated: obstruction detection uses a fixed limit until it is.";
   // The door reports its current address, so this link follows it when the router hands out a new one.
   const ip = /^\d+\.\d+\.\d+\.\d+$/.test(c.ip || "") && c.ip !== "0.0.0.0" ? c.ip : "";
+  // The sunlight history is kept on the door and served by its own page: reachable on the home WiFi only.
+  $("sunlink").innerHTML = ip && c.lm !== undefined
+    ? `At home: <a href="http://${ip}/sun" target="_blank">the door's own sunlight page</a> (also the clock's drift).` : "";
   $("local").innerHTML = ip ? `On the home WiFi: <a href="http://${ip}/">open the door's local page</a> (${ip}`
     + (c.m ? `, also <a href="http://${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local/">${c.m === 2 ? "chickendoor-lab" : "chickendoor"}.local</a>` : "") + ") — calibration and PIN changes" : "";
 
@@ -409,6 +417,40 @@ function drawSeries(id, v, col, limit) {
   x.stroke();
   v.forEach((q, i) => { x.beginPath(); x.arc(P + i * sx, H - 10 - q * sy, 2.5, 0, 7); x.fill(); });
 }
+
+/* ---------- sunlight history ----------
+   Once a day, when it records the evening, the door reports its last 7 days as one line:
+   "Sunlight days: 10-18 95.3/12.1/1.4; 10-17* 80.2/11.8/1.3" (peak / sunset / closing time in %, newest first,
+   * = the board started after sunrise, so the peak may be low). Only the report texts are read (status.json),
+   from the last 3 days (each line holds 7 days), and only when this section is opened. */
+async function loadSun() {
+  const box = $("suntbl");
+  box.textContent = "Loading…";
+  try {
+    const r = await fetch(`${API}/channels/${K.c}/status.json?api_key=${encodeURIComponent(K.r)}&days=3&results=8000&t=${Date.now()}`, {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const st = ((await r.json()).feeds || []).filter(f => /^Sunlight days:/.test(f.status || ""));
+    const lastLine = st[st.length - 1];
+    if (!lastLine) {
+      box.innerHTML = "No sunlight days reported yet. The door sends its history once a day at its closing time "
+        + "(sunset + delay), so the first one arrives this evening.";
+      return;
+    }
+    const days = [...lastLine.status.matchAll(/(\d\d-\d\d)(\*?) ([\d.]+)\/([\d.]+)\/([\d.]+)/g)]
+      .map(m => ({day: m[1], partial: !!m[2], peak: +m[3], sunset: +m[4], close: +m[5]}));
+    const avg = days.length ? days.reduce((a, d) => a + d.sunset, 0) / days.length : 0;
+    let h = `<table><tr><td>Day</td><td>Peak</td><td>Sunset</td><td>Closing</td></tr>`;
+    days.forEach(d => { h += `<tr><td>${esc(d.day)}</td><td>${d.peak.toFixed(1)} %${d.partial ? "*" : ""}</td><td>${d.sunset.toFixed(1)} %</td><td>${d.close.toFixed(1)} %</td></tr>`; });
+    h += `</table><p>Automatic sunset level: ${days.length >= 3 ? `<b>${avg.toFixed(1)} %</b> (average of ${days.length} sunsets)` : `needs 3 sunsets (${days.length} so far)`}`
+      + (cfg.lt ? `. Your set level: <b>${(cfg.lt / 10).toFixed(1)} %</b>.` : ".") + `</p>`
+      + `<p>Light in % of the sensor's range. Peak = brightest moment of the day (* = the board started after sunrise). `
+      + `Reported ${fmtWhen(new Date(lastLine.created_at))}.</p>`;
+    box.innerHTML = h;
+  } catch (e) {
+    box.textContent = "Could not load the sunlight history (" + e.message + ").";
+  }
+}
+$("sunbox").addEventListener("toggle", () => { if ($("sunbox").open) loadSun(); });
 
 /* ---------- commands ---------- */
 function pin() {
