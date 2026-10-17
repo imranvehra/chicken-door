@@ -6,11 +6,11 @@
 <meta name="theme-color" content="#2e7d32">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Chicken Door">
+<meta name="apple-mobile-web-app-title" content="SAM">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Chicken Door</title>
+<title>SAM - Imran's Chicken Door</title>
 <!--
   Remote control for Imran's chicken door, through ThingSpeak.
   The board uploads its status to a ThingSpeak channel and takes OPEN/CLOSE/SET commands from a TalkBack
@@ -60,10 +60,10 @@
 <body>
 
 <div id="setup" hidden>
-  <h2>Chicken Door <span class="tag">setup</span></h2>
+  <h2>SAM &ndash; Imran's Chicken Door <span class="tag">setup</span></h2>
   <p class="muted">Enter your ThingSpeak details once. They are stored only in this browser on this phone.</p>
   <div class="card keys">
-    <p>Door<br><select id="kd"><option value="coop">Coop (SN2)</option><option value="lab">Lab (SN1)</option></select></p>
+    <p>Door<br><select id="kd"><option value="coop">Coop (SAM2)</option><option value="lab">Lab (SAM1)</option></select></p>
     <p>Channel ID<br><input id="kc" inputmode="numeric"></p>
     <p>Channel Read API Key<br><input id="kr" autocomplete="off"></p>
     <p>TalkBack ID<br><input id="kt" inputmode="numeric"></p>
@@ -73,8 +73,8 @@
 </div>
 
 <div id="main" hidden>
-  <h2>Imran's Chicken Door <span class="tag" id="dname">remote</span></h2>
-  <div class="seg" id="dsel" hidden><button data-d="coop">Coop</button><button data-d="lab">Lab</button></div>
+  <h2>SAM &ndash; Imran's Chicken Door <span class="tag" id="dname">remote</span></h2>
+  <div class="seg" id="dsel" hidden><button data-d="coop">Coop &middot; SAM2</button><button data-d="lab">Lab &middot; SAM1</button></div>
   <div class="muted" id="fresh" title="Tap to refresh">Loading…</div>
   <div id="offline"></div>
   <div id="state" class="st s0">…</div>
@@ -130,7 +130,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-17c (sunlight history)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-17d (SAM)</p>
 </div>
 
 <script>
@@ -146,16 +146,17 @@ function ls(k, v) {                       // localStorage can be unavailable (pr
   catch (e) {}
   return null;
 }
-/* Two boards, each with its own ThingSpeak channel + TalkBack: "coop" (SN2) and "lab" (SN1). Every stored
+/* SAM (named after the neighbor who opened and closed the door by hand). Two units, each with its own
+   ThingSpeak channel + TalkBack: "coop" (SAM2, board SN2) and "lab" (SAM1, board SN1). Every stored
    item (keys, PIN, waiting command) is per door; the coop keeps the original names. */
-const DOORS = {coop: "Coop", lab: "Lab"};
+const DOORS = {coop: "Coop · SAM2", lab: "Lab · SAM1"};
 let door = DOORS[ls("door")] ? ls("door") : "coop", gen = 0;
 function dk(name, d) { return (d || door) === "coop" ? name : name + "_lab"; }
 function hasKeys(d) { return ["ts_c", "ts_r", "ts_t", "ts_k"].every(n => ls(dk(n, d))); }
 function showDoorUI() {
   document.body.classList.toggle("lab", door === "lab");
   $("dname").textContent = DOORS[door];
-  document.title = DOORS[door] + " - Chicken Door";
+  document.title = (door === "coop" ? "SAM2" : "SAM1") + " - Imran's Chicken Door";
   $("dsel").hidden = !(hasKeys("coop") && hasKeys("lab"));   // only when both doors are set up
   $("dsel").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.d === door));
 }
