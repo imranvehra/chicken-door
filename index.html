@@ -81,6 +81,7 @@
   <div id="pend"></div>
   <div id="alarm"></div>
   <div id="batt"></div>
+  <div id="clockwarn"></div>
   <p id="next"></p>
 
   <!-- The hold bars sit above the buttons, where the finger does not cover them. -->
@@ -101,6 +102,8 @@
     <tr><td>Battery</td><td id="bv">–</td></tr>
     <tr><td>Daylight</td><td id="lv">–</td></tr>
     <tr><td>WiFi signal</td><td id="wv">–</td></tr>
+    <tr><td>Clock</td><td id="tv">–</td></tr>
+    <tr><td>Sunlight close</td><td id="sv">–</td></tr>
   </table></div>
 
   <div class="card"><b>Recent events</b><ul id="events"></ul></div>
@@ -111,6 +114,9 @@
     <label class="set">Close after sunset (min, 0-180)<input id="s1" type="number" min="0" max="180" inputmode="numeric"></label>
     <label class="set">If opened at night, close after (min, 1-120)<input id="s2" type="number" min="1" max="120" inputmode="numeric"></label>
     <label class="set">Hold time for buttons (s, 1-10)<input id="s3" type="number" min="1" max="10" inputmode="numeric"></label>
+    <label class="set" style="display:flex;align-items:center;gap:8px"><input id="s6" type="checkbox" style="width:auto;margin:0">
+      Sunlight close: when the clock cannot be trusted, close by the light sensor</label>
+    <label class="set">Sunset light level (%, blank = automatic from the sunlight history)<span class="row"><input id="s7" type="number" step="0.1" min="0" max="100" inputmode="decimal"> <span id="s7a" class="muted"></span></span></label>
     <label class="set">Obstruction: closing current above (× normal, 1.2-10)<span class="row"><input id="s4" type="number" step="0.1" min="1.2" max="10" inputmode="decimal"> <span id="s4a" class="muted"></span></span></label>
     <button id="ssave">Send settings to the door</button>
     <p class="muted">Calibration and PIN changes are only possible on the local page at the coop.</p>
@@ -119,7 +125,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-16 (every close charted)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-17 (sunlight close)</p>
 </div>
 
 <script>
@@ -153,8 +159,8 @@ function selectDoor(d) {
   door = d; ls("door", d); gen++;
   feeds = []; last = null; done = null; cfg = Object.assign({}, CFG0); clearTimeout(watchTimer);
   $("fresh").textContent = "Loading…"; $("state").className = "st s0"; $("state").textContent = "…";
-  ["offline", "pend", "alarm", "batt", "next", "events", "calinfo", "local"].forEach(id => $(id).innerHTML = "");
-  $("bv").textContent = $("lv").textContent = $("wv").textContent = $("lastmove").textContent = "–";
+  ["offline", "pend", "alarm", "batt", "clockwarn", "next", "events", "calinfo", "local"].forEach(id => $(id).innerHTML = "");
+  $("bv").textContent = $("lv").textContent = $("wv").textContent = $("tv").textContent = $("sv").textContent = $("lastmove").textContent = "–";
   start();
 }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
@@ -272,6 +278,11 @@ function render() {
     cfg = Object.assign(cfg, c);
     if (!$("setbox").open) {
       $("s1").value = cfg.s; $("s2").value = cfg.n; $("s3").value = cfg.h; $("s4").value = (cfg.o / 100).toFixed(1); showLimitAmps();   // stored in %, shown as 2.0x
+      if (c.lm !== undefined) {   // sunlight close (boards from 2026-10-17 on)
+        $("s6").checked = c.lm === 1;
+        $("s7").value = c.lt ? (c.lt / 10).toFixed(1) : "";
+        $("s7a").textContent = c.le > 0 ? `in use: ${(c.le / 10).toFixed(1)} %` : "automatic needs 3 sunsets of history";
+      }
     }
   }
   // Sensors (boards from 2026-10-11 on): b = battery level 0 none / 1 OK / 2 low / 3 critical (close only).
@@ -281,6 +292,17 @@ function render() {
     $("batt").innerHTML = b === 3 ? `<div class="al">&#9888; Battery critical (${v}): the door will only close until it is charged.</div>`
       : b === 2 ? `<div class="warn">&#9888; Battery low (${v}): check the charger.</div>` : "";
     $("lv").textContent = (c.l / 10).toFixed(1) + " %" + (c.d >= 0 ? ` · at closing time ${(c.d / 10).toFixed(1)} %` : "");
+  }
+  // Clock and sunlight close (boards from 2026-10-17 on): tq 0 none / 1 trusted / 2 too old, ta = minutes since
+  // internet time, lm on/off, le = level in use, sa = the light sensor is in charge now.
+  if (c.tq !== undefined) {
+    $("tv").innerHTML = c.tq === 1 ? (c.ta < 120 ? `internet (synced ${c.ta} min ago)` : `own clock, no internet for ${Math.round(c.ta / 60)} h`)
+      : c.tq === 2 ? `<b>own clock too old (no internet for ${Math.round(c.ta / 60)} h)</b>` : "<b>none (no internet time since a restart)</b>";
+    $("sv").innerHTML = !c.lm ? "off" : c.le <= 0 ? "on, but no level yet (needs 3 sunsets of history)"
+      : c.sa ? `<b>IN CHARGE</b> (level ${(c.le / 10).toFixed(1)} %)` : `on, standing by (level ${(c.le / 10).toFixed(1)} %)`;
+    $("clockwarn").innerHTML = c.tq === 1 ? ""
+      : (c.lm && c.le > 0) ? `<div class="warn">&#9888; No trusted clock: the light sensor closes the door tonight.</div>`
+      : `<div class="al">&#9888; No trusted clock and sunlight close is off: the door will not close by itself.</div>`;
   }
   // w = the door's WiFi signal in dBm: below -70 the link gets unreliable (pages cut off, slow replies).
   if (c.w) {
@@ -429,7 +451,7 @@ async function send(cmd, label) {
    before it, or any report made after the door took the command. */
 function resolvePend() {
   if (!pend) return;
-  // Settings: done when the door confirms ("Settings: ...") or refuses them; its moves in the meantime are
+  // Settings: done when the door confirms ("Settings: ..." - it is logged last) or refuses them; its moves in the meantime are
   // unrelated (an automatic close, say) and must not be taken as the answer.
   if (pend.cmd === "SET") {
     const r = feeds.find(f => f.entry_id > pend.before && /^Settings:|SET refused/i.test(f.status || ""));
@@ -542,8 +564,13 @@ $("s4").oninput = showLimitAmps;
 $("ssave").onclick = () => {
   const s = +$("s1").value, n = +$("s2").value, h = +$("s3").value, o = Math.round(+$("s4").value * 100);
   if (!(s >= 0 && s <= 180 && n >= 1 && n <= 120 && h >= 1 && h <= 10 && o >= 120 && o <= 1000)) { alert("A value is out of range."); return; }
+  const lv = $("s7").value.trim(), lt = lv === "" ? 0 : Math.round(+lv * 10);
+  if (!(lt >= 0 && lt <= 1000)) { alert("The sunset light level must be 0-100 %."); return; }
   $("setbox").open = false;
-  send(`SET ${s} ${n} ${h} ${o}%`, "Settings");   // the obstruction limit is in % of normal current
+  // The obstruction limit is in % of normal current; "L<on>,<level>" = sunlight close (only boards that report
+  // it get it: an older board would refuse the extra part).
+  const sun = cfg.lm !== undefined ? ` L${$("s6").checked ? 1 : 0},${lt}` : "";
+  send(`SET ${s} ${n} ${h} ${o}%${sun}`, "Settings");
 };
 
 /* ---------- start ---------- */
