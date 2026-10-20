@@ -130,7 +130,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-19 (history kept on the phone)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-19b (sunlight from reports)</p>
 </div>
 
 <script>
@@ -467,32 +467,78 @@ function drawSeries(id, v, col, limit) {
 }
 
 /* ---------- sunlight history ----------
-   Once a day, when it records the evening, the door reports its last 7 days as one line:
-   "Sunlight days: 10-18 95.3/12.1/1.4; 10-17* 80.2/11.8/1.3" (peak / sunset / closing time in %, newest first,
-   * = the board started after sunrise, so the peak may be low). Only the report texts are read (status.json),
-   from the last 3 days (each line holds 7 days), and only when this section is opened. */
+   Built in the app from the door's own reports: every report (at least every 10 min) carries the light level
+   (l= in field 8, 0.1 %). For each of the last 7 days the app works out sunrise and sunset for the place the
+   door's firmware uses (so the times match the door's own schedule) and takes:
+     peak    = the highest reading between sunrise and sunset (* = no report near sunrise: the door was offline),
+     sunset  = the light at sunset, interpolated between the two reports around it,
+     closing = the same at sunset + the sunset delay (the current setting).
+   (The door was meant to send this as a daily line, but a firmware slip sends it only while an alarm is active;
+   its own stored record still drives the automatic level, le= in field 8, shown below the table.)
+   Only field 8 is read, and only when this section is opened (~300 KB for 8 days). */
+const SUN_LAT = 30.0539, SUN_LON = -95.1588;   // the firmware's SITE (site.h): Kingwood; the lakehouse sunset is ~1 min apart
+
+/* Sunrise and sunset (ms, UTC) for a calendar date; the sunrise equation with the standard -0.833 deg
+   (refraction + the sun's disc), within a minute of the door's own calculation. */
+function sunTimes(y, m, d) {
+  const rad = Math.PI / 180, jd = Date.UTC(y, m - 1, d, 12) / 86400000 + 2440587.5;
+  const n = Math.round(jd - 2451545.0 + 0.0008), js = n - SUN_LON / 360;
+  const M = (357.5291 + 0.98560028 * js) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const L = (M + C + 180 + 102.9372) % 360;
+  const jt = 2451545.0 + js + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * L * rad);
+  const dec = Math.asin(Math.sin(L * rad) * Math.sin(23.4397 * rad));
+  const w = Math.acos((Math.sin(-0.833 * rad) - Math.sin(SUN_LAT * rad) * Math.sin(dec)) / (Math.cos(SUN_LAT * rad) * Math.cos(dec))) / rad;
+  const ms = j => (j - 2440587.5) * 86400000;
+  return {rise: ms(jt - w / 360), set: ms(jt + w / 360)};
+}
+
+/* Light at time t (ms), interpolated between the reports around it; null if there is none within 20 min. */
+function lightAt(pts, t) {
+  let i = pts.findIndex(q => q.t >= t);
+  if (i < 0) return null;
+  const b = pts[i], a = i > 0 ? pts[i - 1] : null;
+  if (b.t - t > 1200000 && (!a || t - a.t > 1200000)) return null;
+  if (!a || b.t === a.t) return b.l;
+  if (t - a.t > 1200000) return b.l;
+  if (b.t - t > 1200000) return a.l;
+  return a.l + (b.l - a.l) * (t - a.t) / (b.t - a.t);
+}
+
 async function loadSun() {
   const box = $("suntbl");
   box.textContent = "Loading…";
   try {
-    const r = await fetch(`${API}/channels/${K.c}/status.json?api_key=${encodeURIComponent(K.r)}&days=3&results=8000&t=${Date.now()}`, {cache: "no-store"});
+    const r = await fetch(`${API}/channels/${K.c}/fields/8.json?api_key=${encodeURIComponent(K.r)}&days=8&results=8000&t=${Date.now()}`, {cache: "no-store"});
     if (!r.ok) throw new Error("HTTP " + r.status);
-    const st = ((await r.json()).feeds || []).filter(f => /^Sunlight days:/.test(f.status || ""));
-    const lastLine = st[st.length - 1];
-    if (!lastLine) {
-      box.innerHTML = "No sunlight days reported yet. The door sends its history once a day at its closing time "
-        + "(sunset + delay), so the first one arrives this evening.";
-      return;
+    const feeds8 = (await r.json()).feeds || [];
+    const pts = feeds8.map(f => ({t: new Date(f.created_at).getTime(), l: parseCfg(f.field8).l}))
+      .filter(q => q.l !== undefined).sort((a, b) => a.t - b.t);
+    const newest = feeds8.length ? parseCfg(feeds8[feeds8.length - 1].field8) : {};
+    const delay = (newest.s !== undefined ? newest.s : cfg.s) * 60000;
+    const rows = [];
+    for (let k = 0; k < 7; k++) {
+      const day = new Date(Date.now() - k * 86400000), st = sunTimes(day.getFullYear(), day.getMonth() + 1, day.getDate());
+      if (st.set + delay > Date.now()) continue;               // today, before the closing time
+      const dayPts = pts.filter(q => q.t >= st.rise && q.t <= st.set);
+      if (!dayPts.length) continue;
+      const ss = lightAt(pts, st.set), cl = lightAt(pts, st.set + delay);
+      rows.push({label: day.toLocaleDateString([], {month: "short", day: "numeric"}),
+                 peak: Math.max(...dayPts.map(q => q.l)), partial: dayPts[0].t - st.rise > 1200000,
+                 sunset: ss, close: cl, set: new Date(st.set)});
     }
-    const days = [...lastLine.status.matchAll(/(\d\d-\d\d)(\*?) ([\d.]+)\/([\d.]+)\/([\d.]+)/g)]
-      .map(m => ({day: m[1], partial: !!m[2], peak: +m[3], sunset: +m[4], close: +m[5]}));
-    const avg = days.length ? days.reduce((a, d) => a + d.sunset, 0) / days.length : 0;
+    if (!rows.length) { box.innerHTML = "No days with light readings yet."; return; }
+    const f1 = v => v === null ? "–" : (v / 10).toFixed(1) + " %";
     let h = `<table><tr><td>Day</td><td>Peak</td><td>Sunset</td><td>Closing</td></tr>`;
-    days.forEach(d => { h += `<tr><td>${esc(d.day)}</td><td>${d.peak.toFixed(1)} %${d.partial ? "*" : ""}</td><td>${d.sunset.toFixed(1)} %</td><td>${d.close.toFixed(1)} %</td></tr>`; });
-    h += `</table><p>Automatic sunset level: ${days.length >= 3 ? `<b>${avg.toFixed(1)} %</b> (average of ${days.length} sunsets)` : `needs 3 sunsets (${days.length} so far)`}`
-      + (cfg.lt ? `. Your set level: <b>${(cfg.lt / 10).toFixed(1)} %</b>.` : ".") + `</p>`
-      + `<p>Light in % of the sensor's range. Peak = brightest moment of the day (* = the board started after sunrise). `
-      + `Reported ${fmtWhen(new Date(lastLine.created_at))}.</p>`;
+    rows.forEach(d => { h += `<tr><td>${esc(d.label)}</td><td>${f1(d.peak)}${d.partial ? "*" : ""}</td><td>${f1(d.sunset)}</td><td>${f1(d.close)}</td></tr>`; });
+    // The last 3 sunsets, like the door's own automatic level (older days may predate the install).
+    const ss = rows.filter(d => d.sunset !== null).slice(0, 3), avg = ss.length ? ss.reduce((a, d) => a + d.sunset, 0) / ss.length : 0;
+    h += `</table><p>Average sunset light of the last ${ss.length} days: <b>${(avg / 10).toFixed(1)} %</b>.<br>`
+      + (newest.le > 0 ? `The door's automatic sunset level, from its own records: <b>${(newest.le / 10).toFixed(1)} %</b>.`
+                       : `The door's automatic level needs 3 recorded sunsets.`)
+      + (newest.lt ? ` Your set level: <b>${(newest.lt / 10).toFixed(1)} %</b>.` : "") + `</p>`
+      + `<p>From the door's 10-minute reports. Light in % of the sensor's range; sunset and closing time (sunset + `
+      + `${Math.round(delay / 60000)} min) interpolated between reports. * = the door was offline at sunrise, so the peak may be low.</p>`;
     box.innerHTML = h;
   } catch (e) {
     box.textContent = "Could not load the sunlight history (" + e.message + ").";
