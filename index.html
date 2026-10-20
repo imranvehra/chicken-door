@@ -130,7 +130,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-17d (SAM)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-19 (history kept on the phone)</p>
 </div>
 
 <script>
@@ -207,6 +207,70 @@ function fmtWhen(d) {
   return (today ? "" : d.toLocaleDateString([], {month: "short", day: "numeric"}) + " ") + fmtTime(d);
 }
 
+/* ---------- history kept on the phone ----------
+   A read returns only the last 120 reports (~20 hours), so moves and events used to drop out of the charts and
+   the list after a day. The app now keeps its own record per door (localStorage): the last HIST_MOVES opens
+   and closes and HIST_EVENTS events, extended with every read. After a gap (the app was not opened for a
+   while) the missing reports are fetched once - only field 8 and the report text, which is all the history
+   needs; a phone without a record fills it from the last HIST_DAYS days. Each event keeps the time of the
+   first report that carried it, i.e. when it happened (the door repeats its newest event in every report). */
+const HIST_MOVES = 30, HIST_EVENTS = 40, HIST_DAYS = 14;
+let hist = null;
+function newHist() { return {v: 1, last: 0, lastAt: "", open: [], close: [], ev: [], ko: "", kc: "", key: "", st: null}; }
+function loadHist() {
+  try { hist = JSON.parse(ls(dk("hist")) || "null"); } catch (e) { hist = null; }
+  if (!hist || hist.v !== 1) hist = newHist();
+}
+function saveHist() { ls(dk("hist"), JSON.stringify(hist)); }
+
+/* Adds reports (any order, may overlap what is already there) to the record. */
+function addReports(list) {
+  [...list].sort((a, b) => a.entry_id - b.entry_id).forEach(f => {
+    if (f.entry_id <= hist.last) return;
+    hist.last = f.entry_id; hist.lastAt = f.created_at;
+    const at = f.created_at, c = parseCfg(f.field8);
+    if (c.on !== undefined) {   // boards from 2026-10-16: last open and last close, each with a counter
+      const o = c.on + "|" + c.ox + "|" + c.ot, k2 = c.cn + "|" + c.cx + "|" + c.ct;
+      if (c.on > 0 && c.ot >= 10 && o !== hist.ko) hist.open.push({at, start: c.os / 1000, run: c.ox / 1000, t: c.ot / 10});
+      if (c.cn > 0 && c.ct >= 10 && k2 !== hist.kc) hist.close.push({at, start: c.cs / 1000, run: c.cx / 1000, t: c.ct / 10});
+      hist.ko = o; hist.kc = k2;
+    } else if (f.field3 !== undefined && isRealMove(f)) {   // older boards: the last move only (fields 3-5)
+      const d = moveDir(f), k = d + "|" + f.field3 + "|" + f.field4 + "|" + f.field5;
+      if (k !== hist.key && d) (d > 0 ? hist.open : hist.close).push({at, start: +f.field3, run: +f.field4, t: +f.field5});
+      hist.key = k;
+    }
+    if (f.status && f.status !== hist.st) hist.ev.push({at, s: f.status});
+    if (f.status) hist.st = f.status;
+  });
+  hist.open = hist.open.slice(-HIST_MOVES); hist.close = hist.close.slice(-HIST_MOVES); hist.ev = hist.ev.slice(-HIST_EVENTS);
+  saveHist();
+}
+
+/* ThingSpeak's start= takes "YYYY-MM-DD HH:MM:SS" (UTC). */
+function tsTime(d) { return d.toISOString().slice(0, 19).replace("T", " "); }
+
+/* Fetches the reports since `from` (field 8 + report text only) and adds them. Best effort: on failure the
+   recent reports are still used. */
+async function backfill(from, g) {
+  try {
+    const r = await fetch(`${API}/channels/${K.c}/fields/8.json?api_key=${encodeURIComponent(K.r)}&status=true&results=8000`
+      + `&start=${encodeURIComponent(tsTime(from))}&t=${Date.now()}`, {cache: "no-store"});
+    if (!r.ok) return;
+    const j = await r.json();
+    if (g === gen) addReports(j.feeds || []);
+  } catch (e) { /* the recent reports are still used */ }
+}
+
+async function syncHist(g) {
+  if (!hist) loadHist();
+  const oldest = feeds[0];
+  if (oldest && oldest.entry_id > hist.last + 1) {   // reports missing between the record and this read
+    const from = hist.last ? new Date(hist.lastAt) : new Date(Date.now() - HIST_DAYS * 86400000);
+    await backfill(from, g);
+  }
+  if (g === gen) addReports(feeds);
+}
+
 async function refresh() {
   if (busy) return;
   const g = gen;
@@ -219,6 +283,8 @@ async function refresh() {
     if (g !== gen) return;   // the door was switched meanwhile
     feeds = j.feeds || [];
     last = feeds[feeds.length - 1] || null;
+    await syncHist(g);
+    if (g !== gen) return;
     render();
   } catch (e) {
     if (g !== gen) return;
@@ -335,13 +401,9 @@ function render() {
   };
   $("lastmove").innerHTML = esc(line("Open", mv.open)) + "<br>" + esc(line("Close", mv.close));
 
-  // Events: the status text of each report, newest first, without repeats.
-  const ev = []; let prev = null;
-  for (let i = feeds.length - 1; i >= 0 && ev.length < 15; i--) {
-    const f = feeds[i];
-    if (f.status && f.status !== prev) ev.push(`<li><span class="muted">${fmtWhen(new Date(f.created_at))}</span> ${esc(f.status)}</li>`);
-    prev = f.status;
-  }
+  // Events: newest first, each at the time it happened (the first report that carried it).
+  const ev = (hist ? hist.ev : []).slice(-15).reverse()
+    .map(e => `<li><span class="muted">${fmtWhen(new Date(e.at))}</span> ${esc(e.s)}</li>`);
   $("events").innerHTML = ev.join("") || "<li class='muted'>none yet</li>";
 
   drawTrend();
@@ -367,23 +429,8 @@ function moveDir(f) {
    cn/cs/cx/ct in field 8), so a close that was stopped by an obstruction is not hidden by the reopen.
    Older reports only have the last move (fields 3-5, direction md or the door state). */
 function movesByDir() {
-  const open = [], close = [];
-  let key = "", ko = "", kc = "";
-  feeds.forEach(f => {
-    const c = parseCfg(f.field8), at = new Date(f.created_at);
-    if (c.on !== undefined) {
-      const o = c.on + "|" + c.ox + "|" + c.ot, k2 = c.cn + "|" + c.cx + "|" + c.ct;
-      if (c.on > 0 && c.ot >= 10 && o !== ko) open.push({at, start: c.os / 1000, run: c.ox / 1000, t: c.ot / 10});
-      if (c.cn > 0 && c.ct >= 10 && k2 !== kc) close.push({at, start: c.cs / 1000, run: c.cx / 1000, t: c.ct / 10});
-      ko = o; kc = k2;
-      return;
-    }
-    if (!isRealMove(f)) return;
-    const d = moveDir(f), k = d + "|" + f.field3 + "|" + f.field4 + "|" + f.field5;
-    if (k !== key && d) (d > 0 ? open : close).push({at, start: +f.field3, run: +f.field4, t: +f.field5});
-    key = k;
-  });
-  return {open, close};
+  const conv = q => Object.assign({}, q, {at: new Date(q.at)});
+  return hist ? {open: hist.open.map(conv), close: hist.close.map(conv)} : {open: [], close: []};
 }
 
 function drawTrend() {
@@ -632,6 +679,7 @@ function setupFromLink() {
 function start() {
   setupFromLink();
   loadPend();
+  loadHist();
   showDoorUI();
   if (loadKeys()) { $("setup").hidden = true; $("main").hidden = false; if (pend) checkPend(); else refresh(); } else showSetup();
 }
