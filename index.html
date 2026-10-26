@@ -87,6 +87,7 @@
   <!-- The hold bars sit above the buttons, where the finger does not cover them. -->
   <div class="hold"><div id="obb" class="bar"></div></div><button id="ob" class="hb">Hold to OPEN</button>
   <div class="hold"><div id="cbb" class="bar"></div></div><button id="cb" class="hb">Hold to CLOSE</button>
+  <button id="pchk" style="font-size:1em;padding:10px">Check door position (short pulses, the door stays put)</button>
 
   <div class="card">
     <b>Last move</b>
@@ -102,6 +103,7 @@
     <tr><td>Battery</td><td id="bv">–</td></tr>
     <tr><td>Daylight</td><td id="lv">–</td></tr>
     <tr><td>WiFi signal</td><td id="wv">–</td></tr>
+    <tr><td>Cloud link</td><td id="hv">–</td></tr>
     <tr><td>Clock</td><td id="tv">–</td></tr>
     <tr><td>Sunlight close</td><td id="sv">–</td></tr>
   </table></div>
@@ -130,7 +132,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-26 (lost commands reported)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-27 (door acknowledges commands)</p>
 </div>
 
 <script>
@@ -305,7 +307,7 @@ function render() {
   const s = Math.max(0, Math.min(4, parseInt(last.field1) || 0));
   resolvePend();
   const moving = s === 1 || s === 3; // the board reported that the door is moving
-  if (pend && pend.cmd !== "SET") {
+  if (pend && (pend.cmd === "OPEN" || pend.cmd === "CLOSE")) {
     // The last report is from before the command (or says the door is moving): show what is happening,
     // never the old state.
     const op = pend.cmd === "OPEN";
@@ -327,13 +329,13 @@ function render() {
   const al = parseInt(last.field2) || 0;
   // The board sends a new alarm's text once; later reports carry its newest event. So the banner text comes
   // from the newest report that looks like an alarm.
-  const ALARM_RE = /^OBSTRUCTION|^Obstruction while|OVERCURRENT|no motor current|draws? no current|drew no current|^Gave up/;
+  const ALARM_RE = /^OBSTRUCTION|^Obstruction while|OVERCURRENT|no motor current|draws? no current|drew no current|^Gave up|^WIRING FAULT|^NO 12 V|NO current to the actuator/;
   const alf = al ? [...feeds].reverse().find(f => ALARM_RE.test(f.status || "")) : null;
   $("alarm").innerHTML = al ? `<div class="al">&#9888; ${esc(alf ? alf.status : "Alarm: see the door's local page")}</div>` : "";
 
   // Field 6: minutes from that report until the next automatic close, and why ("5 night" / "1290 sunset").
   const m = (last.field6 || "").match(/^(\d+)\s+(night|sunset)$/);
-  if ((pend && pend.cmd !== "SET") || moving) $("next").textContent = "";
+  if ((pend && (pend.cmd === "OPEN" || pend.cmd === "CLOSE")) || moving) $("next").textContent = "";
   else if (s === 4 || s === 3) $("next").textContent = "Stays closed until you open it";
   else if (m) {
     const at = new Date(t.getTime() + (+m[1]) * 60000);
@@ -380,6 +382,14 @@ function render() {
   if (c.w) {
     const q = c.w >= -60 ? "good" : c.w >= -70 ? "fair" : c.w >= -80 ? "weak" : "very weak";
     $("wv").innerHTML = c.w < -70 ? `<b>${c.w} dBm (${q})</b>` : `${c.w} dBm (${q})`;
+  }
+  // Cloud link and watchdogs (firmware from 2026-10-27), counted since the door's last power loss.
+  if (c.ck !== undefined) {
+    const bad = c.wd || c.wm || c.lr || c.ue;
+    $("hv").innerHTML = !bad ? "OK (no watchdog action, nothing lost)"
+      : `${c.wm || c.wd ? "<b>" : ""}watchdog: ${c.wm} WiFi module restart${c.wm === 1 ? "" : "s"}, `
+        + `${c.wd} controller restart${c.wd === 1 ? "" : "s"}${c.wm || c.wd ? "</b>" : ""}; `
+        + `${c.lr} lost repl${c.lr === 1 ? "y" : "ies"}, ${c.ue} lost byte${c.ue === 1 ? "" : "s"} (since power-up)`;
   }
   $("ob").textContent = `Hold ${cfg.h} s to OPEN`;
   $("cb").textContent = `Hold ${cfg.h} s to CLOSE`;
@@ -577,7 +587,10 @@ async function send(cmd, label) {
   } catch (e) {
     alert(e.message); return;
   }
-  pend = {cmd, label, id: (c.command || c).id, at: Date.now(), picked: 0,
+  // ack: the door reports the id of each command it has acted on (ck= in field 8, firmware from 2026-10-27):
+  // only that counts as "the door took it". Older firmware: the command leaving the queue is all there is.
+  pend = {cmd, label, id: (c.command || c).id, at: Date.now(), picked: 0, gone: 0,
+          ack: last ? parseCfg(last.field8).ck !== undefined : false,
           before: last ? last.entry_id : 0, bst: last ? last.status || "" : "", bs: last ? last.field1 : ""};
   done = null;
   savePend(); render(); watch();
@@ -587,6 +600,42 @@ async function send(cmd, label) {
    before it, or any report made after the door took the command. */
 function resolvePend() {
   if (!pend) return;
+  if (pend.ack) {
+    // Taken = a report from the door carrying this command's id. Its event is the door's answer (or, for a
+    // move, "Opening..." with the result in a later report).
+    const a = feeds.find(f => f.entry_id > pend.before && parseCfg(f.field8).ck === pend.id);
+    if (a && !pend.picked) { pend.picked = new Date(a.created_at).getTime(); pend.ackEntry = a.entry_id; savePend(); }
+    if (!pend.picked) {
+      if (pend.gone && Date.now() - pend.gone > 90000) {
+        done = {text: `The ${pend.label} command left the queue, but the door never acknowledged it (removed from another phone?).`, bad: true, at: Date.now()};
+        pend = null; savePend();
+      }
+      return;
+    }
+    if (pend.cmd === "SET") {
+      const r = feeds.find(f => f.entry_id >= pend.ackEntry && /^Settings:|SET refused/i.test(f.status || ""));
+      if (r) {
+        if (/wrong PIN|PIN locked/i.test(r.status)) ls(dk("pin"), null);
+        done = {text: r.status, bad: /refused/i.test(r.status), at: Date.now()};
+        pend = null; savePend();
+      } else if (Date.now() - pend.picked > RESULT_GIVEUP_MS) {
+        done = {text: "The door acknowledged the settings but has not confirmed them. Check the door.", bad: true, at: Date.now()};
+        pend = null; savePend();
+      }
+      return;
+    }
+    const mv = last && (last.field1 === "1" || last.field1 === "3");
+    if (last && last.entry_id >= pend.ackEntry && !mv && !/^Position check \(/.test(last.status || "")) {
+      const st = last.status || "";
+      if (/wrong PIN|PIN locked/i.test(st)) ls(dk("pin"), null);
+      done = {text: st, bad: /refused|already|ignored|expired|unknown|PIN|OBSTRUCTION|TIMEOUT|Gave up|WIRING|NO 12 V|NO current|part-open|did not return/i.test(st), at: Date.now()};
+      pend = null; savePend();
+    } else if (Date.now() - pend.picked > RESULT_GIVEUP_MS) {
+      done = {text: `The door acknowledged the ${pend.label} command at ${fmtTime(new Date(pend.picked))} but has not reported the result. Check the door.`, bad: true, at: Date.now()};
+      pend = null; savePend();
+    }
+    return;
+  }
   // Settings: done when the door confirms ("Settings: ..." - it is logged last) or refuses them; its moves in the meantime are
   // unrelated (an automatic close, say) and must not be taken as the answer.
   if (pend.cmd === "SET") {
@@ -633,10 +682,11 @@ function showPend() {
     const sent = fmtTime(new Date(pend.at)), wait = Date.now() - pend.at;
     let h;
     if (pend.picked) {
-      h = `The door took the <b>${esc(pend.label)}</b> command at ${fmtTime(new Date(pend.picked))}. `
-        + (pend.cmd === "SET" ? "Waiting for its report…" : "The result comes when the door stops, in about half a minute.");
+      h = `The door ${pend.ack ? "acknowledged" : "took"} the <b>${esc(pend.label)}</b> command at ${fmtTime(new Date(pend.picked))}. `
+        + (pend.cmd === "SET" ? "Waiting for its report…" : pend.cmd === "CHECK" ? "The result comes in a few seconds."
+           : "The result comes when the door stops, in about half a minute.");
     } else {
-      h = `<b>${esc(pend.label)}</b> sent at ${sent}. Waiting for the door to take it (it checks every 15 s)…`;
+      h = `<b>${esc(pend.label)}</b> sent at ${sent}. Waiting for the door to ${pend.ack ? "acknowledge" : "take"} it (it checks every 15 s)…`;
       if (wait > PICKUP_WARN_MS) h += `<br><b>Not taken after ${Math.round(wait / 60000)} min: the door may be offline.</b> `
         + "The command stays queued and runs as soon as the door is back, unless you cancel it.";
       h += `<button id="pcancel">Cancel this command</button>`;
@@ -668,7 +718,10 @@ async function checkPend() {
       const r = await fetch(`${API}/talkbacks/${K.t}/commands.json?api_key=${encodeURIComponent(K.k)}&t=${Date.now()}`, {cache: "no-store"});
       if (r.ok) {
         const c = (await r.json()).map(x => x.command || x).find(x => x.id === pend.id);
-        if (!c || c.executed_at) { pend.picked = Date.now(); savePend(); }   // taken commands leave the queue
+        if (!c || c.executed_at) {
+          if (pend.ack) { if (!pend.gone) { pend.gone = Date.now(); savePend(); } }   // the door's report decides
+          else { pend.picked = Date.now(); savePend(); }   // older firmware: taken commands leave the queue
+        }
       }
     } catch (e) { /* try again next time */ }
   }
@@ -697,6 +750,11 @@ function hold(id, cmd, label, sameStates) {
 }
 hold("ob", "OPEN", "Open", ["OPEN", "OPENING"]);
 hold("cb", "CLOSE", "Close", ["CLOSED", "CLOSING"]);
+$("pchk").onclick = () => {
+  if (pend) { alert(`Still waiting for the door to answer the ${pend.label} command.`); return; }
+  if (!last || parseCfg(last.field8).ck === undefined) { alert("This door's firmware does not know the position check yet."); return; }
+  if (confirm("Check the door's position? The actuator gives a few short pulses (the door moves a few millimetres and back).")) send("CHECK", "Position check");
+};
 
 /* What the obstruction % means in amps for the calibrated actuator (r = normal closing current, mA). */
 function showLimitAmps() {
