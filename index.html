@@ -130,7 +130,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-19b (sunlight from reports)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-10-26 (lost commands reported)</p>
 </div>
 
 <script>
@@ -606,12 +606,20 @@ function resolvePend() {
     if (!pend.picked) { pend.picked = new Date(last.created_at).getTime(); savePend(); }
     return;
   }
+  // The answer is a new event or a new door state. A report after the door took the command that still carries
+  // the old event and state means the door did not act on it (on 2026-10-26 SAM2 took commands off the queue
+  // and lost them): that is said plainly, and the old event is never shown as the answer.
+  const st = last ? last.status || "" : "";
+  const afterPick = last && pend.picked && new Date(last.created_at).getTime() > pend.picked;
   if (last && last.entry_id > pend.before
-      && ((last.status || "") !== pend.bst || last.field1 !== pend.bs
-          || (pend.picked && new Date(last.created_at).getTime() > pend.picked))) {
-    const st = last.status || "";
+      && (st !== pend.bst || last.field1 !== pend.bs || (afterPick && /^Cloud /.test(st)))) {   // same refusal again
     if (/wrong PIN|PIN locked/i.test(st)) ls(dk("pin"), null);
     done = {text: st, bad: /refused|already|ignored|expired|unknown|PIN|OBSTRUCTION|TIMEOUT|Gave up/i.test(st), at: Date.now()};
+    pend = null; savePend();
+  } else if (last && last.entry_id > pend.before && afterPick) {
+    done = {text: `The door took the ${pend.label} command at ${fmtTime(new Date(pend.picked))} but did not act on it: `
+      + `no new event, and it is still ${(STATES[+last.field1] || "in the same state").toLowerCase()}. Its command link `
+      + `may be faulty. Use the door's local page on the home WiFi, or power the door off and on.`, bad: true, at: Date.now()};
     pend = null; savePend();
   } else if (pend.picked && Date.now() - pend.picked > RESULT_GIVEUP_MS) {
     done = {text: `The door took the ${pend.label} command at ${fmtTime(new Date(pend.picked))} but has not reported back. Check the door.`, bad: true, at: Date.now()};
@@ -635,7 +643,7 @@ function showPend() {
     }
     box.innerHTML = `<div class="card pend">${h}</div>`;
     if ($("pcancel")) $("pcancel").onclick = cancelPend;
-  } else if (done && Date.now() - done.at < 3 * 60000) {
+  } else if (done && Date.now() - done.at < (done.bad ? 30 : 3) * 60000) {   // a failure stays up longer
     box.innerHTML = `<div class="card pend ${done.bad ? "bad" : "ok"}">${done.bad ? "&#9888;" : "&#10004;"} ${esc(done.text)}</div>`;
   } else box.innerHTML = "";
 }
