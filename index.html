@@ -104,6 +104,7 @@
     <tr><td>Daylight</td><td id="lv">–</td></tr>
     <tr><td>WiFi signal</td><td id="wv">–</td></tr>
     <tr><td>Cloud link</td><td id="hv">–</td></tr>
+    <tr id="izrow" hidden><td>Current sensor</td><td id="iv">–</td></tr>
     <tr><td>Clock</td><td id="tv">–</td></tr>
     <tr><td>Sunlight close</td><td id="sv">–</td></tr>
   </table></div>
@@ -132,7 +133,7 @@
   <p class="muted" id="calinfo"></p>
   <p class="muted" id="local"></p>
   <p class="muted"><a href="#" id="kedit">Change ThingSpeak keys</a> · <a href="#" id="pforget">Forget PIN on this phone</a></p>
-  <p class="muted" style="font-size:.75em">App version 2026-10-27 (door acknowledges commands)</p>
+  <p class="muted" style="font-size:.75em">App version 2026-11-08 (current sensor check)</p>
 </div>
 
 <script>
@@ -329,7 +330,7 @@ function render() {
   const al = parseInt(last.field2) || 0;
   // The board sends a new alarm's text once; later reports carry its newest event. So the banner text comes
   // from the newest report that looks like an alarm.
-  const ALARM_RE = /^OBSTRUCTION|^Obstruction while|OVERCURRENT|no motor current|draws? no current|drew no current|^Gave up|^WIRING FAULT|^NO 12 V|NO current to the actuator/;
+  const ALARM_RE = /^OBSTRUCTION|^Obstruction while|OVERCURRENT|no motor current|draws? no current|drew no current|^Gave up|^WIRING FAULT|^NO 12 V|NO current to the actuator|^CURRENT SENSOR FAULT/;
   const alf = al ? [...feeds].reverse().find(f => ALARM_RE.test(f.status || "")) : null;
   $("alarm").innerHTML = al ? `<div class="al">&#9888; ${esc(alf ? alf.status : "Alarm: see the door's local page")}</div>` : "";
 
@@ -382,6 +383,13 @@ function render() {
   if (c.w) {
     const q = c.w >= -60 ? "good" : c.w >= -70 ? "fair" : c.w >= -80 ? "weak" : "very weak";
     $("wv").innerHTML = c.w < -70 ? `<b>${c.w} dBm (${q})</b>` : `${c.w} dBm (${q})`;
+  }
+  // Current sensor (firmware from 2026-11): iz = the reading with the motor off, against 0 V; it must be about 0.
+  // sf = 1 while CURRENT SENSOR FAULT is on (above 0.10 A for 10 s; off again below 0.05 A for 10 s).
+  $("izrow").hidden = c.iz === undefined;
+  if (c.iz !== undefined) {
+    const a = (c.iz / 1000).toFixed(2) + " A with the motor off";
+    $("iv").innerHTML = c.sf ? `<b>FAULT: ${a} (should be 0)</b>` : `OK (${a})`;
   }
   // Cloud link and watchdogs (firmware from 2026-10-27), counted since the door's last power loss.
   if (c.ck !== undefined) {
